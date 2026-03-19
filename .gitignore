@@ -1,0 +1,26 @@
+# окружение и секреты
+.env
+*.session
+*.session-journal
+
+# python
+__pycache__/
+*.pyc
+*.pyo
+venv/
+.venv/
+
+# IDE
+.vscode/
+.idea/
+
+# AI/агенты (не относится к проекту)
+.gemini/
+.agent/
+.agents/
+_agent/
+_agents/
+
+# OS
+.DS_Store
+Thumbs.db
