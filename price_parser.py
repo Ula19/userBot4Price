@@ -7,37 +7,64 @@ logger = logging.getLogger(__name__)
 # каждый товар - словарь с name, price, category
 products = []
 
+# соответствие количества 🔤 эмодзи к категориям
+# пока определяем категорию по содержимому строк после заголовка
+KNOWN_BRANDS = ['apple', 'iphone', 'redmi', 'xiaomi', 'dyson', 'samsung', 'huawei']
+
+
+def _detect_category(name):
+    """определяет категорию по названию товара"""
+    name_lower = name.lower()
+
+    if any(word in name_lower for word in ['dyson']):
+        return 'DYSON'
+    elif any(word in name_lower for word in ['redmi', 'xiaomi']):
+        return 'REDMI'
+    elif any(word in name_lower for word in ['samsung', 'galaxy']):
+        return 'SAMSUNG'
+    elif any(word in name_lower for word in ['huawei']):
+        return 'HUAWEI'
+    else:
+        # по умолчанию apple (т.к. большинство запросов - айфоны)
+        return 'APPLE'
+
 
 def parse_price_message(text):
     """
     парсит одно сообщение из чата прайса
     возвращает список товаров найденных в сообщении
-    
-    формат строки прайса:
-    Название товара — Цена /Количество
+
+    реальный формат строки из телеграма:
+    `Название товара — Цена` /Количество
     или
-    Название товара — Цена/Количество
+    `Название товара — Цена `/Количество
+    бэктики, эмодзи флагов, пробелы - всё учитываем
     """
     found = []
-    current_category = "OTHER"
+
+    # убираем бэктики из текста - они мешают парсингу
+    text = text.replace('`', '')
 
     for line in text.split('\n'):
         line = line.strip()
         if not line:
             continue
 
-        # проверяем не заголовок ли это категории (APPLE, DYSON и тп)
-        # заголовки обычно написаны большими буквами с пробелами между букв
-        clean_line = line.replace(' ', '').upper()
-        if clean_line in ['APPLE', 'REDMI', 'DYSON', 'SAMSUNG', 'XIAOMI', 'HUAWEI']:
-            current_category = clean_line
-            logger.info(f'  категория: {current_category}')
+        # пропускаем строки с эмодзи-заголовками (🔤🔤🔤🔤🔤)
+        if '🔤' in line:
             continue
 
+        # убираем эмодзи флагов
+        line = re.sub(
+            r'[\U0001F1E0-\U0001F1FF\U0001F3F4\U000E0067-\U000E007F]+',
+            '', line
+        ).strip()
+
         # ищем строку с ценой: "название — цена /кол-во"
-        # тире может быть разным: —, –, -
+        # тире может быть: —, –, -
+        # перед ценой может быть пробел или нет
         match = re.match(
-            r'^(.+?)\s*[—–\-]\s*([\d.,]+)\s*/?\s*(\d+)?\s*$',
+            r'^(.+?)\s*[—–\-]\s*([\d]+[.\d]*)\s*/?(\d+)?\s*$',
             line
         )
 
@@ -45,15 +72,15 @@ def parse_price_message(text):
             name = match.group(1).strip()
             price = match.group(2).strip()
 
-            # убираем эмодзи флагов и лишние символы из названия
-            name = re.sub(r'[🇷🇺🇮🇳🇺🇸🇨🇳🇰🇷🇯🇵🇬🇧🇩🇪🇫🇷🇪🇸🇮🇹🏴󠁧󠁢󠁥󠁮󠁧󠁿]+', '', name).strip()
+            # определяем категорию по названию
+            category = _detect_category(name)
 
             found.append({
                 'name': name,
                 'price': price,
-                'category': current_category
+                'category': category
             })
-            logger.info(f'  товар: {name} — {price}')
+            logger.info(f'  [{category}] {name} — {price}')
 
     return found
 
@@ -101,7 +128,7 @@ def update_prices(text):
 
         # добавляем обновленные
         products.extend(new_products)
-        logger.info(f'Прайс обновлен, товаров: {len(products)}')
+        logger.info(f'Прайс обновлен, всего товаров: {len(products)}')
 
 
 def get_all_products():
