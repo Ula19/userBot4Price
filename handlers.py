@@ -23,6 +23,12 @@ def extract_queries(text):
     убирает строку с username и мусорные строки
     каждая непустая строка = отдельный запрос
     """
+    # слова которые не являются запросом сами по себе
+    stop_words = {
+        'куплю', 'купить', 'нужен', 'нужна', 'нужно',
+        'предложите', 'есть', 'ищу', 'хочу', 'надо',
+    }
+
     queries = []
 
     for line in text.split('\n'):
@@ -36,13 +42,18 @@ def extract_queries(text):
         if re.search(r'@\w+\s*·', line):
             continue
 
-        # пропускаем строки только из эмодзи/символов
+        # убираем эмодзи и спецсимволы чтобы проверить что осталось
         clean = re.sub(r'[^\w\s]', '', line).strip()
         if not clean:
             continue
 
         # пропускаем слишком короткие строки (меньше 3 символов)
         if len(clean) < 3:
+            continue
+
+        # пропускаем строки которые состоят только из стоп-слов
+        words = clean.lower().split()
+        if all(word in stop_words for word in words):
             continue
 
         queries.append(line)
