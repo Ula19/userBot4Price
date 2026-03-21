@@ -73,8 +73,9 @@ async def load_prices(client, chat_id):
     logger.info(f'Загружаю прайс из чата: {chat_id}')
 
     # читаем последние сообщения из чата
+    # парсим только сообщения с прайсом (содержат 🔤 заголовки)
     async for message in client.iter_messages(entity, limit=100):
-        if message.text:
+        if message.text and '🔤' in message.text:
             found = parse_price_message(message.text)
             products.extend(found)
 
