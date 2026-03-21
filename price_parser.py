@@ -4,29 +4,12 @@ import logging
 logger = logging.getLogger(__name__)
 
 # тут храним все товары из прайса
-# каждый товар - словарь с name, price, category
+# каждый товар - словарь с name и price
 products = []
 
-# соответствие количества 🔤 эмодзи к категориям
-# пока определяем категорию по содержимому строк после заголовка
-KNOWN_BRANDS = ['apple', 'iphone', 'redmi', 'xiaomi', 'dyson', 'samsung', 'huawei']
-
-
-def _detect_category(name):
-    """определяет категорию по названию товара"""
-    name_lower = name.lower()
-
-    if any(word in name_lower for word in ['dyson']):
-        return 'DYSON'
-    elif any(word in name_lower for word in ['redmi', 'xiaomi']):
-        return 'REDMI'
-    elif any(word in name_lower for word in ['samsung', 'galaxy']):
-        return 'SAMSUNG'
-    elif any(word in name_lower for word in ['huawei']):
-        return 'HUAWEI'
-    else:
-        # по умолчанию apple (т.к. большинство запросов - айфоны)
-        return 'APPLE'
+# сохраняем ссылку на клиент и chat_id чтобы можно было перезагрузить
+_client = None
+_chat_id = None
 
 
 def parse_price_message(text):
@@ -36,13 +19,11 @@ def parse_price_message(text):
 
     реальный формат строки из телеграма:
     `Название товара — Цена` /Количество
-    или
-    `Название товара — Цена `/Количество
     бэктики, эмодзи флагов, пробелы - всё учитываем
     """
     found = []
 
-    # убираем бэктики из текста - они мешают парсингу
+    # убираем бэктики - они мешают парсингу
     text = text.replace('`', '')
 
     for line in text.split('\n'):
@@ -50,7 +31,7 @@ def parse_price_message(text):
         if not line:
             continue
 
-        # пропускаем строки с эмодзи-заголовками (🔤🔤🔤🔤🔤)
+        # пропускаем заголовки с эмодзи (🔤🔤🔤🔤🔤)
         if '🔤' in line:
             continue
 
@@ -61,10 +42,8 @@ def parse_price_message(text):
         ).strip()
 
         # ищем строку с ценой: "название — цена /кол-во"
-        # тире может быть: —, –, -
-        # перед ценой может быть пробел или нет
         match = re.match(
-            r'^(.+?)\s*[—–\-]\s*([\d]+[.\d]*)\s*/?(\d+)?\s*$',
+            r'^(.+?)\s*[—–\-]\s*([\d]+[.\d]*)\s*/?\s*(\d+)?\s*$',
             line
         )
 
@@ -72,32 +51,24 @@ def parse_price_message(text):
             name = match.group(1).strip()
             price = match.group(2).strip()
 
-            # определяем категорию по названию
-            category = _detect_category(name)
-
-            found.append({
-                'name': name,
-                'price': price,
-                'category': category
-            })
-            logger.info(f'  [{category}] {name} — {price}')
+            found.append({'name': name, 'price': price})
+            logger.info(f'  {name} — {price}')
 
     return found
 
 
 async def load_prices(client, chat_id):
     """
-    загружает все цены из чата при запуске бота
-    chat_id может быть 'me' (избранное) или числовой ID
+    загружает все цены из чата
+    вызывается при запуске и при любом изменении в чате прайса
     """
-    global products
+    global products, _client, _chat_id
+    _client = client
+    _chat_id = chat_id
     products = []
 
-    # определяем куда подключаться
-    if chat_id == 'me':
-        entity = 'me'
-    else:
-        entity = int(chat_id)
+    # определяем чат
+    entity = 'me' if chat_id == 'me' else int(chat_id)
 
     logger.info(f'Загружаю прайс из чата: {chat_id}')
 
@@ -111,24 +82,14 @@ async def load_prices(client, chat_id):
     return products
 
 
-def update_prices(text):
+async def reload_prices():
     """
-    обновляет прайс когда приходит новое или измененное сообщение
-    полностью перепарсивает сообщение
+    полная перезагрузка прайса
+    вызывается когда в чате прайса что-то изменилось
     """
-    global products
-
-    # парсим новые товары из сообщения
-    new_products = parse_price_message(text)
-
-    if new_products:
-        # удаляем старые товары с такими же названиями
-        new_names = {p['name'] for p in new_products}
-        products = [p for p in products if p['name'] not in new_names]
-
-        # добавляем обновленные
-        products.extend(new_products)
-        logger.info(f'Прайс обновлен, всего товаров: {len(products)}')
+    if _client and _chat_id:
+        logger.info('Прайс изменился, перезагружаю...')
+        await load_prices(_client, _chat_id)
 
 
 def get_all_products():

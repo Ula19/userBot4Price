@@ -24,20 +24,17 @@ PRICE_CHAT_ID = os.getenv('PRICE_CHAT_ID')
 client = TelegramClient('userbot_session', API_ID, API_HASH)
 
 
-# слушаем обновления в чате прайса (новые и отредактированные сообщения)
+# при любом изменении в чате прайса - перезагружаем весь прайс
 @client.on(events.NewMessage(chats='me' if PRICE_CHAT_ID == 'me' else int(PRICE_CHAT_ID)))
-async def on_price_update(event):
-    """когда в чате прайса появляется новое сообщение - обновляем базу"""
-    if event.text:
-        price_parser.update_prices(event.text)
+async def on_price_new(event):
+    """новое сообщение в чате прайса - перезагружаем всё"""
+    await price_parser.reload_prices()
 
 
 @client.on(events.MessageEdited(chats='me' if PRICE_CHAT_ID == 'me' else int(PRICE_CHAT_ID)))
 async def on_price_edit(event):
-    """когда сообщение в чате прайса редактируется - обновляем базу"""
-    if event.text:
-        logger.info('Обнаружено изменение в прайсе, обновляю...')
-        price_parser.update_prices(event.text)
+    """сообщение отредактировано в чате прайса - перезагружаем всё"""
+    await price_parser.reload_prices()
 
 
 async def main():
