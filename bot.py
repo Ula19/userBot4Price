@@ -3,6 +3,7 @@ import logging
 from dotenv import load_dotenv
 from telethon import TelegramClient, events
 import price_parser
+import handlers
 
 # загружаем переменные из .env
 load_dotenv()
@@ -19,6 +20,7 @@ API_ID = int(os.getenv('API_ID'))
 API_HASH = os.getenv('API_HASH')
 PHONE = os.getenv('PHONE')
 PRICE_CHAT_ID = os.getenv('PRICE_CHAT_ID')
+SOURCE_BOT = os.getenv('SOURCE_BOT')
 
 # создаем клиент телеграма (userbot)
 client = TelegramClient('userbot_session', API_ID, API_HASH)
@@ -47,6 +49,10 @@ async def main():
 
     # загружаем прайс-лист при старте
     await price_parser.load_prices(client, PRICE_CHAT_ID)
+
+    # подключаем обработчик запросов от бота-источника
+    handlers.register_handlers(client, SOURCE_BOT)
+    logger.info(f'Слушаю запросы от @{SOURCE_BOT}')
 
     logger.info('Для остановки нажми Ctrl+C')
 
