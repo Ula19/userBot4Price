@@ -94,10 +94,11 @@ def format_response(query, result):
     return '\n'.join(lines)
 
 
-def register_handlers(client, source_bot):
+def register_handlers(client, source_bot, owner_username=None):
     """
     регистрирует обработчик сообщений от бота-источника
     source_bot - username бота (без @)
+    owner_username - username заказчика для уведомлений (без @)
     """
 
     @client.on(events.NewMessage(from_users=source_bot))
@@ -122,10 +123,16 @@ def register_handlers(client, source_bot):
 
         # ищем цены по каждому запросу
         responses = []
+        not_found_queries = []
+
         for query in queries:
             result = search.find_products(query)
             response = format_response(query, result)
             responses.append(response)
+
+            # запоминаем запросы без точных совпадений
+            if not result['exact']:
+                not_found_queries.append(query)
 
         # собираем итоговый ответ
         full_response = '\n\n'.join(responses)
@@ -139,3 +146,18 @@ def register_handlers(client, source_bot):
                 logger.error(f'  Не удалось отправить @{username}: {e}')
         else:
             logger.warning('  Username не найден, некуда отправлять')
+
+        # уведомляем заказчика о ненайденных запросах
+        if not_found_queries and owner_username:
+            notify_lines = ['🔔 Не найдено в прайсе:']
+            notify_lines.append(f'Юзер: @{username or "неизвестен"}')
+            for q in not_found_queries:
+                notify_lines.append(f'  ❌ {q}')
+
+            try:
+                await client.send_message(
+                    owner_username, '\n'.join(notify_lines)
+                )
+                logger.info(f'  Уведомление отправлено @{owner_username}')
+            except Exception as e:
+                logger.error(f'  Не удалось уведомить @{owner_username}: {e}')

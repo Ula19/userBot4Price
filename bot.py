@@ -21,6 +21,7 @@ API_HASH = os.getenv('API_HASH')
 PHONE = os.getenv('PHONE')
 PRICE_CHAT_ID = os.getenv('PRICE_CHAT_ID')
 SOURCE_BOT = os.getenv('SOURCE_BOT')
+OWNER_USERNAME = os.getenv('OWNER_USERNAME')
 
 # создаем клиент телеграма (userbot)
 client = TelegramClient('userbot_session', API_ID, API_HASH)
@@ -56,8 +57,10 @@ async def main():
     await price_parser.load_prices(client, PRICE_CHAT_ID)
 
     # подключаем обработчик запросов от бота-источника
-    handlers.register_handlers(client, SOURCE_BOT)
+    handlers.register_handlers(client, SOURCE_BOT, OWNER_USERNAME)
     logger.info(f'Слушаю запросы от @{SOURCE_BOT}')
+    if OWNER_USERNAME:
+        logger.info(f'Уведомления о ненайденном → @{OWNER_USERNAME}')
 
     logger.info('Для остановки нажми Ctrl+C')
 
