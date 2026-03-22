@@ -2,20 +2,19 @@ import re
 import logging
 from rapidfuzz import fuzz
 import price_parser
+import aliases as aliases_module
 
 logger = logging.getLogger(__name__)
 
-# словарь для перевода русских слов в английские
-# юзеры могут писать "айфон 17 про макс" вместо "iphone 17 pro max"
+# базовые алиасы (захардкожены)
+# заказчик может добавить свои через Телеграм
 ALIASES = {
     'айфон': 'iphone',
-    'iphone': 'iphone',
     'про': 'pro',
     'макс': 'max',
+    'мах': 'max',
     'дайсон': 'dyson',
     'редми': 'redmi',
-    'сим': 'sim',
-    'есим': 'esim',
     'серебро': 'silver',
     'серебряный': 'silver',
     'оранжевый': 'orange',
@@ -30,7 +29,156 @@ ALIASES = {
 STOP_WORDS = [
     'куплю', 'купить', 'нужен', 'нужна', 'нужно',
     'предложите', 'есть', 'ищу', 'хочу', 'надо',
+    'цвет', 'по', 'наличию',
 ]
+
+# --- SIM-карты ---
+# паттерны для определения типа SIM карты из запроса юзера
+# порядок важен! проверяем от более специфичных к менее
+
+# (eSim) — только виртуальные сим карты
+ESIM_PATTERNS = [
+    r'есим[\s\-]*есим',     # есим-есим, есим есим
+    r'esim[\s\-]*esim',     # esim-esim, esim esim
+    r'2\s*esim',            # 2esim, 2 esim
+    r'2\s*есим',            # 2есим, 2 есим
+    r'2\s*е[\s\-]*сим',     # 2е-сим, 2 е сим, 2е сим
+    r'2\s*e[\s\-]*sim',     # 2e-sim, 2 e sim
+    r'2\s*вирт',            # 2вирт
+    r'\bе[\s\-]сим\b',      # е-сим, е сим
+    r'\be[\s\-]sim\b',      # e-sim, e sim
+    r'\bесим\b',            # есим
+    r'\besim\b',            # esim
+    r'\bвирт\b',            # вирт
+]
+
+# (Sim Sim) — две физические сим карты
+SIM_SIM_PATTERNS = [
+    r'сим[\s\-]*сим',       # сим-сим, сим сим
+    r'sim[\s\-]*sim',       # sim-sim, sim sim
+    r'2\s*сим',             # 2сим, 2 сим
+    r'2\s*sim',             # 2sim, 2 sim
+    r'2\s*физ',             # 2физ, 2 физ
+    r'2\s*nano',            # 2nano, 2 nano
+    r'2\s*nano[\s\-]*sim',  # 2nano-sim, 2nano sim
+    r'дуал[\s\-]*сим',      # дуал-сим, дуал сим
+    r'dual[\s\-]*sim',      # dual-sim, dual sim
+]
+
+# (Sim eSim) — одна физическая + одна виртуальная
+SIM_ESIM_PATTERNS = [
+    r'sim[\s\-]*e\s*sim',   # sim-esim, sim esim, sim-e sim, sim e sim
+    r'sim[\s\-]*есим',      # sim-есим, sim есим
+    r'сим[\s\-]*е\s*сим',   # сим-есим, сим есим
+    r'сим[\s\-]*физ',       # сим-физ
+    r'физ[\s\-]*сим',       # физ-сим, физ сим
+    r'физическ\w*\s*сим',   # физическая сим карта, физическая сим
+    r'nano[\s\-]*sim',      # nano-sim, nano sim
+    r'1\s*сим',             # 1сим, 1 сим
+    r'1\s*sim',             # 1sim, 1 sim
+    r'1\s*физ',             # 1физ
+    # одиночные — если просто "сим" или "sim" без цифр и пар
+    r'\bсим\b',             # сим
+    r'\bsim\b',             # sim
+    r'\bфиз\b',             # физ
+]
+
+# одиночные esim паттерны — НЕ должны ловить sim-esim
+ESIM_SINGLE_PATTERNS = [
+    r'(?<!sim[\s\-])е[\s\-]*сим',    # е-сим, е сим (но не сим-есим)
+    r'(?<!sim[\s\-])e[\s\-]*sim',     # e-sim, e sim (но не sim-esim)
+    r'(?<!\w)есим(?!\w)',             # есим (отдельное слово)
+    r'(?<!\w)esim(?!\w)',             # esim (отдельное слово)
+    r'\bвирт\b',                      # вирт
+]
+
+
+def _detect_sim_type(text):
+    """
+    определяет какой тип SIM ищет юзер
+    проверяем от более специфичных паттернов к менее
+    """
+    text = text.lower()
+
+    # 0. SIM+eSIM compound (sim-esim, sim esim) — САМЫЙ ПЕРВЫЙ!
+    # иначе \besim\b словит esim внутри sim-esim
+    if re.search(r'sim[\s\-]*e\s*sim|сим[\s\-]*е\s*сим|sim[\s\-]*есим', text):
+        return 'sim_esim'
+
+    # 1. двойные eSIM (2esim, есим-есим и тд)
+    for pattern in ESIM_PATTERNS:
+        if re.search(pattern, text):
+            return 'esim'
+
+    # 2. двойные физические SIM (2сим, сим-сим и тд)
+    for pattern in SIM_SIM_PATTERNS:
+        if re.search(pattern, text):
+            return 'sim_sim'
+
+    # 3. SIM+eSIM — остальные (физ-сим, nano-sim, просто сим и тд)
+    for pattern in SIM_ESIM_PATTERNS:
+        if re.search(pattern, text):
+            return 'sim_esim'
+
+    # 4. одиночные eSIM (только если ничего выше не сработало)
+    for pattern in ESIM_SINGLE_PATTERNS:
+        if re.search(pattern, text):
+            return 'esim'
+
+    return None
+
+
+def _get_product_sim_type(name):
+    """
+    определяет тип SIM в названии товара из прайса
+    '17 Pro Max 256 Silver (Sim eSim)' → 'sim_esim'
+    '17 Pro Max 256 Orange (eSim)' → 'esim'
+    """
+    name_lower = name.lower()
+
+    # Sim eSim — физ + виртуальная
+    if re.search(r'sim\s+esim|sim\s*\+\s*esim', name_lower):
+        return 'sim_esim'
+
+    # Sim Sim — две физические
+    if re.search(r'sim\s+sim|sim\s*\+\s*sim', name_lower):
+        return 'sim_sim'
+
+    # eSim — только виртуальные
+    if 'esim' in name_lower:
+        return 'esim'
+
+    # Sim — одна физическая (без eSim)
+    if 'sim' in name_lower:
+        return 'sim'
+
+    return None
+
+
+def _filter_by_sim(products, sim_type):
+    """фильтрует товары по типу SIM, если тип указан в запросе"""
+    if not sim_type:
+        return products
+
+    return [p for p in products if _get_product_sim_type(p['name']) == sim_type]
+
+
+def _remove_sim_words(text):
+    """
+    убирает слова связанные с SIM из текста запроса
+    чтобы они не мешали поиску по ключевым словам
+    """
+    # убираем все SIM-паттерны из текста
+    all_patterns = (
+        ESIM_PATTERNS + SIM_SIM_PATTERNS +
+        SIM_ESIM_PATTERNS + ESIM_SINGLE_PATTERNS
+    )
+    for pattern in all_patterns:
+        text = re.sub(pattern, '', text)
+
+    # чистим лишние пробелы
+    text = re.sub(r'\s+', ' ', text).strip()
+    return text
 
 
 def normalize_query(text):
@@ -49,89 +197,48 @@ def normalize_query(text):
     for word in STOP_WORDS:
         text = re.sub(rf'\b{word}\b', '', text, flags=re.IGNORECASE)
 
+    # собираем все алиасы: захардкоженные + из Телеграма
+    # телеграмные переопределяют захардкоженные
+    all_aliases = {**ALIASES, **aliases_module.get_aliases()}
+
     # заменяем русские слова на английские
     words = text.split()
     normalized_words = []
     for word in words:
         word = word.strip('.,;:()[]{}')
-        if word in ALIASES:
-            normalized_words.append(ALIASES[word])
+        if word in all_aliases:
+            normalized_words.append(all_aliases[word])
         elif word:
             normalized_words.append(word)
 
     return ' '.join(normalized_words)
 
 
-def _detect_sim_type(text):
-    """
-    определяет какой тип SIM ищет юзер
-    фильтрация только для esim и sim+esim
-    просто "sim" — не фильтруем (это обычное слово для поиска)
-    """
-    text = text.lower()
-
-    # "sim esim" или "sim+esim" — двойная сим
-    if re.search(r'sim\s*\+?\s*esim|sim\s+esim', text):
-        return 'sim_esim'
-
-    # просто "esim" (без sim перед ним)
-    if 'esim' in text:
-        return 'esim'
-
-    # просто "sim" — не фильтруем, пусть ищет как обычное слово
-    return None
-
-
-def _get_product_sim_type(name):
-    """
-    определяет тип SIM в названии товара из прайса
-    '17 Pro Max 256 Silver (Sim eSim)' → 'sim_esim'
-    '17 Pro Max 256 Orange (eSim)' → 'esim'
-    """
-    name_lower = name.lower()
-
-    if re.search(r'sim\s+esim|sim\s*\+?\s*esim', name_lower):
-        return 'sim_esim'
-
-    if 'esim' in name_lower:
-        return 'esim'
-
-    if 'sim' in name_lower:
-        return 'sim'
-
-    return None
-
-
-def _filter_by_sim(products, sim_type):
-    """фильтрует товары по типу SIM, если тип указан в запросе"""
-    if not sim_type:
-        return products
-
-    return [p for p in products if _get_product_sim_type(p['name']) == sim_type]
-
-
-def find_products(query):
+def find_products(query, sim_override=None):
     """
     ищет товары по запросу юзера
 
+    sim_override - тип SIM если указан отдельно через запятую
     точное совпадение = ВСЕ слова из запроса есть в названии товара
     похожее = fuzzy match с высоким score
-    после поиска фильтруем по типу SIM
     """
     products = price_parser.get_all_products()
 
     if not products:
         return {'exact': [], 'similar': []}
 
+    # определяем тип SIM из запроса (до нормализации)
+    sim_type = sim_override or _detect_sim_type(query)
+
+    # убираем SIM-слова из запроса перед нормализацией
+    clean_query = _remove_sim_words(query.lower())
+
     # нормализуем запрос
-    normalized = normalize_query(query)
+    normalized = normalize_query(clean_query)
     query_words = normalized.split()
 
     if not query_words:
         return {'exact': [], 'similar': []}
-
-    # определяем тип SIM из запроса
-    sim_type = _detect_sim_type(normalized)
 
     logger.info(f'Поиск: "{query}" → "{normalized}" (SIM: {sim_type or "любой"})')
 
@@ -155,7 +262,7 @@ def find_products(query):
             if score >= 55:
                 similar.append({**product, 'score': score})
 
-    # фильтруем по типу SIM если указан в запросе
+    # фильтруем по типу SIM если указан
     exact = _filter_by_sim(exact, sim_type)
     similar = _filter_by_sim(similar, sim_type)
 

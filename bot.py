@@ -4,6 +4,7 @@ from dotenv import load_dotenv
 from telethon import TelegramClient, events
 import price_parser
 import handlers
+import aliases
 
 # загружаем переменные из .env
 load_dotenv()
@@ -35,6 +36,7 @@ async def on_price_new(event):
     if event.out:
         return
     await price_parser.reload_prices()
+    await aliases.reload_aliases()
 
 
 @client.on(events.MessageEdited(chats='me' if PRICE_CHAT_ID == 'me' else int(PRICE_CHAT_ID)))
@@ -43,6 +45,7 @@ async def on_price_edit(event):
     if event.out:
         return
     await price_parser.reload_prices()
+    await aliases.reload_aliases()
 
 
 async def main():
@@ -53,8 +56,9 @@ async def main():
     me = await client.get_me()
     logger.info(f'Бот запущен как: {me.first_name} (@{me.username})')
 
-    # загружаем прайс-лист при старте
+    # загружаем прайс-лист и алиасы при старте
     await price_parser.load_prices(client, PRICE_CHAT_ID)
+    await aliases.load_aliases(client, PRICE_CHAT_ID)
 
     # подключаем обработчик запросов от бота-источника
     handlers.register_handlers(client, SOURCE_BOT, OWNER_USERNAME)

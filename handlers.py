@@ -1,9 +1,23 @@
 import re
 import logging
+from datetime import datetime, timezone, timedelta
 from telethon import events
 import search
 
 logger = logging.getLogger(__name__)
+
+# московское время (UTC+3)
+MSK = timezone(timedelta(hours=3))
+
+# рабочие часы (по МСК)
+WORK_START = 10  # 10:00
+WORK_END = 20    # 20:00
+
+
+def is_work_time():
+    """проверяет что сейчас рабочее время (10:00-20:00 МСК)"""
+    now = datetime.now(MSK)
+    return WORK_START <= now.hour < WORK_END
 
 
 def extract_username(text):
@@ -19,9 +33,9 @@ def extract_username(text):
 
 def extract_queries(text):
     """
-    извлекает строки запроса из сообщения бота
+    извлекает запросы из сообщения бота
     убирает строку с username и мусорные строки
-    каждая непустая строка = отдельный запрос
+    поддерживает запятые: "17 pro 256, 17 pro max 256, sim-esim"
     """
     # слова которые не являются запросом сами по себе
     stop_words = {
@@ -29,69 +43,76 @@ def extract_queries(text):
         'предложите', 'есть', 'ищу', 'хочу', 'надо',
     }
 
-    queries = []
+    raw_lines = []
 
     for line in text.split('\n'):
         line = line.strip()
-
-        # пропускаем пустые строки
         if not line:
             continue
 
-        # пропускаем строку с username (содержит @username)
+        # пропускаем строку с username
         if re.search(r'@\w+\s*·', line):
             continue
 
-        # убираем эмодзи и спецсимволы чтобы проверить что осталось
+        # убираем эмодзи и спецсимволы для проверки
         clean = re.sub(r'[^\w\s]', '', line).strip()
-        if not clean:
+        if not clean or len(clean) < 3:
             continue
 
-        # пропускаем слишком короткие строки (меньше 3 символов)
-        if len(clean) < 3:
-            continue
-
-        # пропускаем строки которые состоят только из стоп-слов
+        # пропускаем строки только из стоп-слов
         words = clean.lower().split()
         if all(word in stop_words for word in words):
             continue
 
-        queries.append(line)
+        raw_lines.append(line)
+
+    # разбиваем по запятым если есть
+    queries = []
+    for line in raw_lines:
+        if ',' in line:
+            parts = [p.strip() for p in line.split(',') if p.strip()]
+            queries.extend(parts)
+        else:
+            queries.append(line)
 
     return queries
 
 
-def format_response(query, result):
+def _detect_shared_sim(queries):
+    """
+    проверяет не является ли последний элемент типом SIM для всех запросов
+    пример: ["17 pro 256", "17 pro max 256", "sim-esim"]
+    → sim-esim применяется ко всем, убираем из списка запросов
+    """
+    if len(queries) < 2:
+        return queries, None
+
+    last = queries[-1].lower().strip()
+    sim_type = search._detect_sim_type(last)
+
+    if sim_type:
+        # проверяем что последний элемент - ТОЛЬКО SIM тип (не товар)
+        clean = search._remove_sim_words(last)
+        clean = search.normalize_query(clean)
+        if not clean.strip():
+            # последний элемент - чисто SIM тип, применяем ко всем
+            return queries[:-1], sim_type
+
+    return queries, None
+
+
+def format_response(results):
     """
     форматирует ответ юзеру
-
-    - если есть точные совпадения: показываем их
-    - если нет точных но есть похожие: говорим что не нашли + показываем похожие
-    - если вообще ничего: говорим что не нашли
+    возвращает только НАЙДЕННЫЕ товары (без ❌ сообщений)
+    формат как в прайсе, без количества
     """
     lines = []
 
-    if result['exact']:
-        # точные совпадения
-        if len(result['exact']) == 1:
-            p = result['exact'][0]
-            lines.append(f'{p["name"]} — {p["price"]}')
-        else:
-            for p in result['exact']:
-                lines.append(f'• {p["name"]} — {p["price"]}')
+    for product in results:
+        lines.append(f'{product["name"]} — {product["price"]}')
 
-    elif result['similar']:
-        # нет точных, но есть похожие
-        lines.append(f'❌ По запросу "{query}" точных совпадений нет.')
-        lines.append('Похожие товары:')
-        for p in result['similar']:
-            lines.append(f'• {p["name"]} — {p["price"]}')
-
-    else:
-        # вообще ничего
-        lines.append(f'❌ "{query}" — не найдено в прайсе')
-
-    return '\n'.join(lines)
+    return '\n'.join(lines) if lines else None
 
 
 def register_handlers(client, source_bot, owner_username=None):
@@ -108,6 +129,11 @@ def register_handlers(client, source_bot, owner_username=None):
         if not text:
             return
 
+        # проверяем рабочее время
+        if not is_work_time():
+            logger.info('Запрос вне рабочего времени, пропускаю')
+            return
+
         logger.info(f'Новый запрос от {source_bot}')
 
         # достаем username юзера и запросы
@@ -118,46 +144,57 @@ def register_handlers(client, source_bot, owner_username=None):
             logger.info('  Нет запросов в сообщении')
             return
 
+        # проверяем общий SIM тип (последний элемент через запятую)
+        queries, shared_sim = _detect_shared_sim(queries)
+
         logger.info(f'  Юзер: @{username}')
         logger.info(f'  Запросов: {len(queries)}')
+        if shared_sim:
+            logger.info(f'  Общий SIM: {shared_sim}')
 
         # ищем цены по каждому запросу
-        responses = []
-        not_found_queries = []
+        all_found = []
+        notify_queries = []
 
         for query in queries:
-            result = search.find_products(query)
-            response = format_response(query, result)
-            responses.append(response)
+            result = search.find_products(query, sim_override=shared_sim)
 
-            # запоминаем запросы без точных совпадений
-            if not result['exact']:
-                not_found_queries.append(query)
+            if result['exact']:
+                all_found.extend(result['exact'])
+            elif result['similar']:
+                # не нашли точно, но есть похожие - уведомить заказчика
+                notify_queries.append({
+                    'query': query,
+                    'similar': result['similar']
+                })
 
-        # собираем итоговый ответ
-        full_response = '\n\n'.join(responses)
-
-        # отправляем юзеру в ЛС
-        if username:
+        # отправляем юзеру ТОЛЬКО найденные товары
+        if all_found and username:
+            response = format_response(all_found)
             try:
-                await client.send_message(username, full_response)
+                await client.send_message(username, response)
+                await client.send_message(username, 'привет')
+                await client.send_message(username, 'как дали')
                 logger.info(f'  Ответ отправлен @{username}')
             except Exception as e:
                 logger.error(f'  Не удалось отправить @{username}: {e}')
-        else:
-            logger.warning('  Username не найден, некуда отправлять')
+        elif not all_found:
+            logger.info('  Ничего не найдено, юзеру не пишем')
 
-        # уведомляем заказчика о ненайденных запросах
-        if not_found_queries and owner_username:
-            notify_lines = ['🔔 Не найдено в прайсе:']
+        # уведомляем заказчика о запросах с похожими (но не точными)
+        if notify_queries and owner_username:
+            notify_lines = ['🔔 Не удалось точно найти:']
             notify_lines.append(f'Юзер: @{username or "неизвестен"}')
-            for q in not_found_queries:
-                notify_lines.append(f'  ❌ {q}')
+            for item in notify_queries:
+                notify_lines.append(f'\n❌ Запрос: "{item["query"]}"')
+                notify_lines.append('Похожие:')
+                for p in item['similar'][:3]:
+                    notify_lines.append(f'  • {p["name"]} — {p["price"]}')
 
             try:
                 await client.send_message(
                     owner_username, '\n'.join(notify_lines)
                 )
-                logger.info(f'  Уведомление отправлено @{owner_username}')
+                logger.info(f'  Уведомление → @{owner_username}')
             except Exception as e:
                 logger.error(f'  Не удалось уведомить @{owner_username}: {e}')
