@@ -65,7 +65,8 @@ def normalize_query(text):
 def _detect_sim_type(text):
     """
     определяет какой тип SIM ищет юзер
-    возвращает: 'sim_esim', 'esim', 'sim', или None
+    фильтрация только для esim и sim+esim
+    просто "sim" — не фильтруем (это обычное слово для поиска)
     """
     text = text.lower()
 
@@ -77,10 +78,7 @@ def _detect_sim_type(text):
     if 'esim' in text:
         return 'esim'
 
-    # просто "sim" (без esim)
-    if 'sim' in text:
-        return 'sim'
-
+    # просто "sim" — не фильтруем, пусть ищет как обычное слово
     return None
 
 
