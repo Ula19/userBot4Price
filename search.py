@@ -62,18 +62,63 @@ def normalize_query(text):
     return ' '.join(normalized_words)
 
 
+def _detect_sim_type(text):
+    """
+    определяет какой тип SIM ищет юзер
+    возвращает: 'sim_esim', 'esim', 'sim', или None
+    """
+    text = text.lower()
+
+    # "sim esim" или "sim+esim" — двойная сим
+    if re.search(r'sim\s*\+?\s*esim|sim\s+esim', text):
+        return 'sim_esim'
+
+    # просто "esim" (без sim перед ним)
+    if 'esim' in text:
+        return 'esim'
+
+    # просто "sim" (без esim)
+    if 'sim' in text:
+        return 'sim'
+
+    return None
+
+
+def _get_product_sim_type(name):
+    """
+    определяет тип SIM в названии товара из прайса
+    '17 Pro Max 256 Silver (Sim eSim)' → 'sim_esim'
+    '17 Pro Max 256 Orange (eSim)' → 'esim'
+    """
+    name_lower = name.lower()
+
+    if re.search(r'sim\s+esim|sim\s*\+?\s*esim', name_lower):
+        return 'sim_esim'
+
+    if 'esim' in name_lower:
+        return 'esim'
+
+    if 'sim' in name_lower:
+        return 'sim'
+
+    return None
+
+
+def _filter_by_sim(products, sim_type):
+    """фильтрует товары по типу SIM, если тип указан в запросе"""
+    if not sim_type:
+        return products
+
+    return [p for p in products if _get_product_sim_type(p['name']) == sim_type]
+
+
 def find_products(query):
     """
     ищет товары по запросу юзера
-    
-    возвращает словарь:
-    {
-        'exact': [список точных совпадений],
-        'similar': [список похожих если точных нет]
-    }
-    
+
     точное совпадение = ВСЕ слова из запроса есть в названии товара
     похожее = fuzzy match с высоким score
+    после поиска фильтруем по типу SIM
     """
     products = price_parser.get_all_products()
 
@@ -87,7 +132,10 @@ def find_products(query):
     if not query_words:
         return {'exact': [], 'similar': []}
 
-    logger.info(f'Поиск: "{query}" → "{normalized}"')
+    # определяем тип SIM из запроса
+    sim_type = _detect_sim_type(normalized)
+
+    logger.info(f'Поиск: "{query}" → "{normalized}" (SIM: {sim_type or "любой"})')
 
     exact = []
     similar = []
@@ -109,10 +157,14 @@ def find_products(query):
             if score >= 55:
                 similar.append({**product, 'score': score})
 
+    # фильтруем по типу SIM если указан в запросе
+    exact = _filter_by_sim(exact, sim_type)
+    similar = _filter_by_sim(similar, sim_type)
+
     # сортируем похожие по score (лучшие первыми)
     similar.sort(key=lambda x: x['score'], reverse=True)
 
-    # берем максимум 5 похожих чтобы не спамить
+    # берем максимум 5 похожих
     similar = similar[:5]
 
     logger.info(f'  Точных: {len(exact)}, Похожих: {len(similar)}')
