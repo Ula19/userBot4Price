@@ -293,7 +293,18 @@ def find_products(query, sim_override=None):
     # ВАЖНО: передаем в _remove_sim_words текст в нижнем регистре
     clean_query = _remove_sim_words(query.lower())
     normalized = normalize_query(clean_query)
-    query_words = normalized.split()
+
+    # чистим мусор: оставляем только слова из прайса + цифры
+    # это убирает "маркетплейсов", "оригинал", "срочно" и тд
+    vocab = set()
+    for p in products:
+        name = re.sub(r'\([^)]*\)', '', p['name']).lower()
+        for w in name.split():
+            w = w.strip('.,;:()[]{}/-')
+            if w:
+                vocab.add(w)
+
+    query_words = [w for w in normalized.split() if w in vocab or w.isdigit()]
 
     if not query_words:
         return {'exact': [], 'similar': []}
