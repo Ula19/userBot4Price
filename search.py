@@ -298,10 +298,10 @@ def find_products(query, sim_override=None):
     # нормализуем запрос
     normalized = normalize_query(clean_query)
 
-    # фильтруем: оставляем только слова из прайса
+    # фильтруем: оставляем слова из прайса + числа (память, модель)
     vocab = _build_vocabulary()
     all_words = normalized.split()
-    query_words = [w for w in all_words if w in vocab]
+    query_words = [w for w in all_words if w in vocab or w.isdigit()]
 
     if not query_words:
         return {'exact': [], 'similar': []}
