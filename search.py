@@ -111,9 +111,9 @@ def _detect_sim_type(text):
     """
     text = text.lower()
 
-    # 0. SIM+eSIM compound (sim-esim, sim+esim, sim esim) — САМЫЙ ПЕРВЫЙ!
+    # 0. SIM+eSIM compound (sim-esim, sim+esim, 1sim+e-sim) — САМЫЙ ПЕРВЫЙ!
     # иначе \besim\b словит esim внутри sim-esim
-    if re.search(r'sim[\s\-\+]*e\s*sim|сим[\s\-\+]*е\s*сим|sim[\s\-\+]*есим', text):
+    if re.search(r'\d*sim[\s\-\+]*e[\s\-]*sim|\d*сим[\s\-\+]*е[\s\-]*сим|\d*sim[\s\-\+]*есим', text):
         return 'sim_esim'
 
     # 1. двойные eSIM (2esim, есим-есим и тд)
@@ -285,6 +285,19 @@ def find_products(query, sim_override=None):
             word in product_name_lower
             for word in query_words
         )
+
+        # проверка модели: pro / pro max / базовая
+        # если запрос "17 256" — не показывать "17 Pro Max 256"
+        if all_words_match:
+            has_pro_query = 'pro' in query_words
+            has_max_query = 'max' in query_words
+            has_pro_product = 'pro' in product_name_lower
+            has_max_product = 'max' in product_name_lower
+
+            if not has_pro_query and has_pro_product:
+                all_words_match = False  # запрос без pro, товар с pro
+            elif has_pro_query and not has_max_query and has_max_product:
+                all_words_match = False  # запрос pro, товар pro max
 
         if all_words_match:
             exact.append(product)
