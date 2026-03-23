@@ -30,6 +30,7 @@ STOP_WORDS = [
     'куплю', 'купить', 'нужен', 'нужна', 'нужно',
     'предложите', 'есть', 'ищу', 'хочу', 'надо',
     'цвет', 'по', 'наличию',
+    'apple', 'gb', 'гб',
 ]
 
 # --- SIM-карты ---
@@ -100,9 +101,9 @@ def _detect_sim_type(text):
     """
     text = text.lower()
 
-    # 0. SIM+eSIM compound (sim-esim, sim esim) — САМЫЙ ПЕРВЫЙ!
+    # 0. SIM+eSIM compound (sim-esim, sim+esim, sim esim) — САМЫЙ ПЕРВЫЙ!
     # иначе \besim\b словит esim внутри sim-esim
-    if re.search(r'sim[\s\-]*e\s*sim|сим[\s\-]*е\s*сим|sim[\s\-]*есим', text):
+    if re.search(r'sim[\s\-\+]*e\s*sim|сим[\s\-\+]*е\s*сим|sim[\s\-\+]*есим', text):
         return 'sim_esim'
 
     # 1. двойные eSIM (2esim, есим-есим и тд)
@@ -171,13 +172,13 @@ def _remove_sim_words(text):
     """
     # 1. сначала убираем составные паттерны (sim-esim, сим-сим и тд)
     compound_patterns = [
-        r'sim[\s\-]*e\s*sim',   # sim-esim, sim esim
-        r'сим[\s\-]*е\s*сим',   # сим-есим
-        r'sim[\s\-]*есим',      # sim-есим
-        r'есим[\s\-]*есим',     # есим-есим
-        r'esim[\s\-]*esim',     # esim-esim
-        r'сим[\s\-]*сим',       # сим-сим
-        r'sim[\s\-]*sim',       # sim-sim
+        r'sim[\s\-\+]*e\s*sim',   # sim-esim, sim+esim, sim esim
+        r'сим[\s\-\+]*е\s*сим',   # сим-есим
+        r'sim[\s\-\+]*есим',      # sim-есим
+        r'есим[\s\-\+]*есим',     # есим-есим
+        r'esim[\s\-\+]*esim',     # esim-esim
+        r'сим[\s\-\+]*сим',       # сим-сим
+        r'sim[\s\-\+]*sim',       # sim-sim, sim+sim
     ]
     for pattern in compound_patterns:
         text = re.sub(pattern, '', text)
@@ -190,8 +191,8 @@ def _remove_sim_words(text):
     for pattern in all_patterns:
         text = re.sub(pattern, '', text)
 
-    # чистим лишние дефисы и пробелы
-    text = re.sub(r'(?<!\w)-|-(?!\w)', ' ', text)  # одинокие дефисы
+    # чистим лишние дефисы, плюсы и пробелы
+    text = re.sub(r'(?<!\w)[\-\+]|[\-\+](?!\w)', ' ', text)  # одинокие дефисы/плюсы
     text = re.sub(r'\s+', ' ', text).strip()
     return text
 
@@ -207,6 +208,9 @@ def normalize_query(text):
 
     # убираем эмодзи, знаки вопроса, восклицательные
     text = re.sub(r'[❗‼⁉❓?!]+', '', text)
+
+    # убираем GB/ГБ после чисел (256GB → 256)
+    text = re.sub(r'(\d+)\s*(?:gb|гб)', r'\1', text, flags=re.IGNORECASE)
 
     # убираем мусорные слова
     for word in STOP_WORDS:
