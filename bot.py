@@ -37,8 +37,6 @@ client = TelegramClient(SESSION_PATH, API_ID, API_HASH)
 @client.on(events.NewMessage(chats='me' if PRICE_CHAT_ID == 'me' else int(PRICE_CHAT_ID)))
 async def on_price_new(event):
     """новое сообщение в чате прайса - перезагружаем всё"""
-    if event.out:
-        return
     await price_parser.reload_prices()
     await aliases.reload_aliases()
 
@@ -46,8 +44,6 @@ async def on_price_new(event):
 @client.on(events.MessageEdited(chats='me' if PRICE_CHAT_ID == 'me' else int(PRICE_CHAT_ID)))
 async def on_price_edit(event):
     """сообщение отредактировано в чате прайса - перезагружаем всё"""
-    if event.out:
-        return
     await price_parser.reload_prices()
     await aliases.reload_aliases()
 
