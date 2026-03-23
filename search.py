@@ -253,6 +253,23 @@ def normalize_query(text):
     return ' '.join(normalized_words)
 
 
+def _build_vocabulary():
+    """
+    строит словарь всех слов из названий товаров в прайсе
+    используется чтобы оставлять в запросе только релевантные слова
+    """
+    products = price_parser.get_all_products()
+    vocab = set()
+    for product in products:
+        # убираем скобочную часть (eSim), (Sim eSim) — это SIM, не для поиска
+        name = re.sub(r'\([^)]*\)', '', product['name']).lower()
+        for word in name.split():
+            word = word.strip('.,;:()[]{}/-')
+            if word and len(word) >= 1:
+                vocab.add(word)
+    return vocab
+
+
 def find_products(query, sim_override=None):
     """
     ищет товары по запросу юзера
@@ -274,7 +291,11 @@ def find_products(query, sim_override=None):
 
     # нормализуем запрос
     normalized = normalize_query(clean_query)
-    query_words = normalized.split()
+
+    # фильтруем: оставляем только слова из прайса
+    vocab = _build_vocabulary()
+    all_words = normalized.split()
+    query_words = [w for w in all_words if w in vocab]
 
     if not query_words:
         return {'exact': [], 'similar': []}
