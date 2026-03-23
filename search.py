@@ -11,6 +11,7 @@ logger = logging.getLogger(__name__)
 ALIASES = {
     'айфон': 'iphone',
     'про': 'pro',
+    'п': 'pro',
     'макс': 'max',
     'мах': 'max',
     'дайсон': 'dyson',
@@ -19,16 +20,18 @@ ALIASES = {
     'серебро': 'silver',
     'серебряный': 'silver',
     'сильвер': 'silver',
+    'вайт': 'silver',       # в iPhone white = silver
+    'белый': 'silver',       # в iPhone белый = silver
     'оранжевый': 'orange',
     'оранж': 'orange',
     'синий': 'blue',
     'блю': 'blue',
+    'блу': 'blue',
     'голубой': 'blue',
     'черный': 'black',
     'черн': 'black',
     'блек': 'black',
     'блэк': 'black',
-    'белый': 'white',
     'золотой': 'gold',
     'золото': 'gold',
     'лавандовый': 'lavender',
@@ -36,6 +39,15 @@ ALIASES = {
     'лавандер': 'lavender',
     'зеленый': 'green',
     'розовый': 'pink',
+    'черн': 'black',
+}
+
+# многословные алиасы (обрабатываются ДО однословных)
+MULTI_WORD_ALIASES = {
+    'п м': 'pro max',
+    'пм': 'pro max',
+    'deep blue': 'blue',
+    'cosmic orange': 'orange',
 }
 
 # слова которые нужно убрать из запроса (мусор)
@@ -44,6 +56,7 @@ STOP_WORDS = [
     'предложите', 'есть', 'ищу', 'хочу', 'надо',
     'цвет', 'по', 'наличию',
     'apple', 'iphone', 'gb', 'гб',
+    'dual',  # "dual esim" = esim, само слово dual — мусор
 ]
 
 # --- SIM-карты ---
@@ -52,6 +65,8 @@ STOP_WORDS = [
 
 # (eSim) — только виртуальные сим карты
 ESIM_PATTERNS = [
+    r'dual\s*esim',         # dual esim
+    r'dual\s*есим',         # dual есим
     r'есим[\s\-]*есим',     # есим-есим, есим есим
     r'esim[\s\-]*esim',     # esim-esim, esim esim
     r'2\s*esim',            # 2esim, 2 esim
@@ -192,6 +207,16 @@ def _remove_sim_words(text):
         r'esim[\s\-\+]*esim',     # esim-esim
         r'сим[\s\-\+]*сим',       # сим-сим
         r'sim[\s\-\+]*sim',       # sim-sim, sim+sim
+        r'dual\s*esim',           # dual esim
+        r'dual\s*есим',           # dual есим
+        # числовые SIM-паттерны (1физ, 2сим, 1sim и тд) — убираем целиком
+        r'\b[12]\s*физ\w*',        # 1физ, 2физ, 1 физ сим
+        r'\b[12]\s*сим\w*',        # 1сим, 2сим
+        r'\b[12]\s*sim\w*',        # 1sim, 2sim
+        r'\b[12]\s*e\s*sim\w*',    # 1esim, 2esim, 1 e sim
+        r'\b[12]\s*есим\w*',       # 1есим, 2есим
+        r'\b[12]\s*вирт\w*',       # 1вирт, 2вирт
+        r'\b[12]\s*nano\w*',       # 1nano, 2nano
     ]
     for pattern in compound_patterns:
         text = re.sub(pattern, '', text)
@@ -231,6 +256,9 @@ def normalize_query(text):
     # убираем GB/ГБ после чисел (256GB → 256)
     text = re.sub(r'(\d+)\s*(?:gb|гб)', r'\1', text, flags=re.IGNORECASE)
 
+    # нормализуем ТБ/TB (1тб → 1tb, 2тб → 2tb)
+    text = re.sub(r'(\d+)\s*(?:тб|tb)', r'\1tb', text, flags=re.IGNORECASE)
+
     # убираем количество: "2 шт", "3 штуки", "-3", "x5" и тд
     text = re.sub(r'\d+\s*(?:шт\w*|pcs|штук\w*)', '', text, flags=re.IGNORECASE)
     text = re.sub(r'[\-]\s*\d+\b', '', text)  # -3, -5 (количество со знаком минус)
@@ -243,8 +271,11 @@ def normalize_query(text):
     # телеграмные переопределяют захардкоженные
     all_aliases = {**ALIASES, **aliases_module.get_aliases()}
 
-    # сначала заменяем многословные алиасы (deep blue → blue, cosmic orange → orange)
-    multi_word = {k: v for k, v in all_aliases.items() if ' ' in k}
+    # собираем многословные: захардкоженные + из однословных алиасов
+    multi_word = {**MULTI_WORD_ALIASES}
+    for k, v in all_aliases.items():
+        if ' ' in k:
+            multi_word[k] = v
     # сортируем по длине — длинные первыми
     for key in sorted(multi_word.keys(), key=len, reverse=True):
         text = text.replace(key, multi_word[key])
