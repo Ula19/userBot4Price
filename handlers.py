@@ -1,10 +1,14 @@
 import re
+import time
 import logging
 from datetime import datetime, timezone, timedelta
 from telethon import events
 import search
 
 logger = logging.getLogger(__name__)
+
+# анти-спам кулдаун
+user_last_reply = {}
 
 # московское время (UTC+3)
 MSK = timezone(timedelta(hours=3))
@@ -143,6 +147,15 @@ def register_handlers(client, source_bot, owner_username=None):
         if not queries:
             logger.info('  Нет запросов в сообщении')
             return
+
+        if username:
+            now = time.time()
+            if username in user_last_reply:
+                elapsed = now - user_last_reply[username]
+                if elapsed < 25:
+                    logger.warning(f'  [Анти-спам] Игнорируем запрос от @{username}. Прошло {int(elapsed)}с из 25с.')
+                    return
+            user_last_reply[username] = now
 
         # проверяем общий SIM тип (последний элемент через запятую)
         queries, shared_sim = _detect_shared_sim(queries)
