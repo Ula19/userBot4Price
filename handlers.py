@@ -79,7 +79,46 @@ def extract_queries(text):
         else:
             queries.append(line)
 
-    return queries
+    # раскрываем слеш-опции: "blue/orange" → два отдельных запроса
+    expanded = []
+    for q in queries:
+        parts = _expand_slash_options(q)
+        expanded.extend(parts)
+
+    return expanded
+
+
+def _expand_slash_options(query):
+    """
+    раскрывает слеш-опции в запросе
+    '17 pro max 256 blue/orange eSIM' → ['17 pro max 256 blue eSIM', '17 pro max 256 orange eSIM']
+    '17 pro max 256/512 blue' → ['17 pro max 256 blue', '17 pro max 512 blue']
+    без слешей → возвращает как есть
+    """
+    # ищем паттерн "слово/слово" (может быть несколько вариантов через /)
+    match = re.search(r'(\S+(?:/\S+)+)', query)
+    if not match:
+        return [query]
+
+    slash_part = match.group(1)
+
+    # не трогаем дроби вроде "16/256" (RAM/Storage) и "6/128GB"
+    # дробь = первое число НАМНОГО меньше второго (16/256 = 16x, 6/128 = 21x)
+    # опции памяти = числа близки (256/512 = 2x)
+    options = slash_part.split('/')
+    if all(re.match(r'^\d+\w*$', opt) for opt in options):
+        nums = [int(re.match(r'^(\d+)', opt).group(1)) for opt in options if re.match(r'^(\d+)', opt)]
+        if len(nums) >= 2 and max(nums) / min(nums) >= 8:
+            # ratio ≥ 8 → это дробь (16/256, 6/128, 8/256) — оставляем как есть
+            return [query]
+
+    # раскрываем: заменяем слеш-часть каждым вариантом
+    result = []
+    for option in options:
+        expanded = query[:match.start()] + option + query[match.end():]
+        result.append(expanded.strip())
+
+    return result
 
 
 def _detect_shared_sim(queries):
