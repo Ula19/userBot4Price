@@ -190,7 +190,8 @@ def _remove_sim_words(text):
     for pattern in all_patterns:
         text = re.sub(pattern, '', text)
 
-    # чистим лишние пробелы
+    # чистим лишние дефисы и пробелы
+    text = re.sub(r'(?<!\w)-|-(?!\w)', ' ', text)  # одинокие дефисы
     text = re.sub(r'\s+', ' ', text).strip()
     return text
 

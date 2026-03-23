@@ -64,7 +64,9 @@ async def load_aliases(client, chat_id):
     entity = 'me' if chat_id == 'me' else int(chat_id)
 
     async for message in client.iter_messages(entity, limit=100):
-        if message.text and '📝' in message.text:
+        if message.text and (
+            '📝' in message.text or 'АЛИАС' in message.text.upper()
+        ):
             found = parse_aliases_message(message.text)
             telegram_aliases.update(found)
 
