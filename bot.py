@@ -24,8 +24,12 @@ PRICE_CHAT_ID = os.getenv('PRICE_CHAT_ID')
 SOURCE_BOT = os.getenv('SOURCE_BOT')
 OWNER_USERNAME = os.getenv('OWNER_USERNAME')
 
+# путь к сессии — в Docker монтируется ./data, локально в текущей папке
+import os as _os
+SESSION_PATH = 'data/userbot_session' if _os.path.isdir('data') else 'userbot_session'
+
 # создаем клиент телеграма (userbot)
-client = TelegramClient('userbot_session', API_ID, API_HASH)
+client = TelegramClient(SESSION_PATH, API_ID, API_HASH)
 
 
 # при любом изменении в чате прайса - перезагружаем весь прайс

@@ -6,5 +6,5 @@ services:
     env_file:
       - .env
     volumes:
-      # сессия Telethon — хранится на хосте, НЕ пересоздаётся при рестарте
-      - ./userbot_session.session:/app/userbot_session.session
+      # папка с сессией — хранится на хосте
+      - ./data:/app/data
