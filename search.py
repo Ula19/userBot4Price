@@ -268,9 +268,11 @@ def _extract_numbers(text):
 
 def _get_series(text):
     """определяет серию: pro_max, pro, plus, base"""
-    if 'pro max' in text: return 'pro_max'
-    if 'pro' in text: return 'pro'
-    if 'plus' in text: return 'plus'
+    words = text.split()
+    if 'pro' in words and 'max' in words: return 'pro_max'
+    if 'max' in words: return 'pro_max'  # "17 max 256" = "17 pro max 256"
+    if 'pro' in words: return 'pro'
+    if 'plus' in words: return 'plus'
     return 'base'
 
 def find_products(query, sim_override=None):
