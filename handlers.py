@@ -173,7 +173,6 @@ def register_handlers(client, source_bot, owner_username=None):
             response = format_response(all_found)
             try:
                 await client.send_message(username, response)
-                await client.send_message(username, 'привет')
                 await client.send_message(username, 'как дали')
                 logger.info(f'  Ответ отправлен @{username}')
             except Exception as e:
