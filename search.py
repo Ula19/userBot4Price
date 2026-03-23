@@ -201,6 +201,9 @@ def _remove_sim_words(text):
     for pattern in all_patterns:
         text = re.sub(pattern, '', text)
 
+    # убираем количество со знаком минус (-3, -5) ДО очистки дефисов
+    text = re.sub(r'-\s*\d+(?!\d)', '', text)
+
     # чистим лишние дефисы, плюсы и пробелы
     text = re.sub(r'(?<!\w)[\-\+]|[\-\+](?!\w)', ' ', text)  # одинокие дефисы/плюсы
     text = re.sub(r'\s+', ' ', text).strip()
@@ -224,6 +227,10 @@ def normalize_query(text):
 
     # убираем GB/ГБ после чисел (256GB → 256)
     text = re.sub(r'(\d+)\s*(?:gb|гб)', r'\1', text, flags=re.IGNORECASE)
+
+    # убираем количество: "2 шт", "3 штуки", "-3", "x5" и тд
+    text = re.sub(r'\d+\s*(?:шт\w*|pcs|штук\w*)', '', text, flags=re.IGNORECASE)
+    text = re.sub(r'[\-]\s*\d+\b', '', text)  # -3, -5 (количество со знаком минус)
 
     # убираем мусорные слова
     for word in STOP_WORDS:
