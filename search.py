@@ -167,8 +167,22 @@ def _remove_sim_words(text):
     """
     убирает слова связанные с SIM из текста запроса
     чтобы они не мешали поиску по ключевым словам
+    ВАЖНО: сначала убираем составные (sim-esim), потом одиночные
     """
-    # убираем все SIM-паттерны из текста
+    # 1. сначала убираем составные паттерны (sim-esim, сим-сим и тд)
+    compound_patterns = [
+        r'sim[\s\-]*e\s*sim',   # sim-esim, sim esim
+        r'сим[\s\-]*е\s*сим',   # сим-есим
+        r'sim[\s\-]*есим',      # sim-есим
+        r'есим[\s\-]*есим',     # есим-есим
+        r'esim[\s\-]*esim',     # esim-esim
+        r'сим[\s\-]*сим',       # сим-сим
+        r'sim[\s\-]*sim',       # sim-sim
+    ]
+    for pattern in compound_patterns:
+        text = re.sub(pattern, '', text)
+
+    # 2. потом убираем одиночные SIM-паттерны
     all_patterns = (
         ESIM_PATTERNS + SIM_SIM_PATTERNS +
         SIM_ESIM_PATTERNS + ESIM_SINGLE_PATTERNS
