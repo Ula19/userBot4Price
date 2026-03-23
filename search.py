@@ -240,7 +240,13 @@ def normalize_query(text):
     # телеграмные переопределяют захардкоженные
     all_aliases = {**ALIASES, **aliases_module.get_aliases()}
 
-    # заменяем русские слова на английские
+    # сначала заменяем многословные алиасы (deep blue → blue, cosmic orange → orange)
+    multi_word = {k: v for k, v in all_aliases.items() if ' ' in k}
+    # сортируем по длине — длинные первыми
+    for key in sorted(multi_word.keys(), key=len, reverse=True):
+        text = text.replace(key, multi_word[key])
+
+    # потом заменяем однословные алиасы
     words = text.split()
     normalized_words = []
     for word in words:
