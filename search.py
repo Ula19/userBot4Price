@@ -232,7 +232,7 @@ def normalize_query(text):
     text = re.sub(r'\d+\s*(?:шт\w*|pcs|штук\w*)', '', text, flags=re.IGNORECASE)
     text = re.sub(r'[\-]\s*\d+\b', '', text)  # -3, -5 (количество со знаком минус)
 
-    # убираем мусорные слова
+    # убираем мусорные слова (apple, iphone, gb и тд)
     for word in STOP_WORDS:
         text = re.sub(rf'\b{word}\b', '', text, flags=re.IGNORECASE)
 
@@ -259,99 +259,98 @@ def normalize_query(text):
     return ' '.join(normalized_words)
 
 
-def _build_vocabulary():
-    """
-    строит словарь всех слов из названий товаров в прайсе
-    используется чтобы оставлять в запросе только релевантные слова
-    """
-    products = price_parser.get_all_products()
-    vocab = set()
-    for product in products:
-        # убираем скобочную часть (eSim), (Sim eSim) — это SIM, не для поиска
-        name = re.sub(r'\([^)]*\)', '', product['name']).lower()
-        for word in name.split():
-            word = word.strip('.,;:()[]{}/-')
-            if word and len(word) >= 1:
-                vocab.add(word)
-    return vocab
+def _extract_numbers(text):
+    """извлекает все числа из текста"""
+    return set(re.findall(r'\b\d+\b', text))
 
+def _get_series(text):
+    """определяет серию: pro_max, pro, plus, base"""
+    if 'pro max' in text: return 'pro_max'
+    if 'pro' in text: return 'pro'
+    if 'plus' in text: return 'plus'
+    return 'base'
 
 def find_products(query, sim_override=None):
     """
-    ищет товары по запросу юзера
-
-    sim_override - тип SIM если указан отдельно через запятую
-    точное совпадение = ВСЕ слова из запроса есть в названии товара
-    похожее = fuzzy match с высоким score
+    Умный структурный поиск:
+    вместо точного совпадения всех слов, оцениваем товары на предмет ПРОТИВОРЕЧИЙ
+    с запросом по ключевым характеристикам (модель, память, серия).
     """
     products = price_parser.get_all_products()
 
     if not products:
         return {'exact': [], 'similar': []}
 
-    # определяем тип SIM из запроса (до нормализации)
+    # определяем SIM
     sim_type = sim_override or _detect_sim_type(query)
 
-    # убираем SIM-слова из запроса перед нормализацией
+    # нормализуем запрос (чистим мусор, переводим алиасы)
+    # ВАЖНО: передаем в _remove_sim_words текст в нижнем регистре
     clean_query = _remove_sim_words(query.lower())
-
-    # нормализуем запрос
     normalized = normalize_query(clean_query)
-
-    # фильтруем: оставляем слова из прайса + числа (память, модель)
-    vocab = _build_vocabulary()
-    all_words = normalized.split()
-    query_words = [w for w in all_words if w in vocab or w.isdigit()]
+    query_words = normalized.split()
 
     if not query_words:
         return {'exact': [], 'similar': []}
 
-    # слишком общий запрос (1 слово вроде "blue") — только fuzzy, не exact
+    # слишком общий запрос (например просто "blue")
     too_generic = len(query_words) < 2
 
-    logger.info(f'Поиск: "{query}" → "{" ".join(query_words)}" (SIM: {sim_type or "любой"})')
+    # извлекаем характеристики из запроса
+    query_nums = _extract_numbers(normalized)
+    query_series = _get_series(normalized)
+
+    logger.info(f'Поиск: "{query}" → "{normalized}" (SIM: {sim_type or "любой"})')
 
     exact = []
     similar = []
 
     for product in products:
-        product_name_lower = product['name'].lower()
+        # нормализуем имя товара (для алиасов цветов и тд)
+        # убираем SIM из имени чтобы не мешало
+        name_no_sim = re.sub(r'\([^)]*\)', '', product['name']).lower()
+        norm_product = normalize_query(name_no_sim)
+        prod_words = norm_product.split()
 
-        # проверяем точное совпадение - все слова запроса есть в названии
-        all_words_match = all(
-            word in product_name_lower
-            for word in query_words
-        )
+        prod_nums = _extract_numbers(norm_product)
+        prod_series = _get_series(norm_product)
 
-        # проверка модели: pro / pro max / базовая
-        # если запрос "17 256" — не показывать "17 Pro Max 256"
-        if all_words_match:
-            has_pro_query = 'pro' in query_words
-            has_max_query = 'max' in query_words
-            has_pro_product = 'pro' in product_name_lower
-            has_max_product = 'max' in product_name_lower
+        # 1. Проверка на противоречия (Штрафы)
+        is_exact = True
 
-            if not has_pro_query and has_pro_product:
-                all_words_match = False  # запрос без pro, товар с pro
-            elif has_pro_query and not has_max_query and has_max_product:
-                all_words_match = False  # запрос pro, товар pro max
+        # А. Противоречие по числам (модель, память)
+        # Если юзер указал число (например 512, 17, 13), оно ДОЛЖНО быть в товаре
+        for num in query_nums:
+            if num not in prod_nums:
+                is_exact = False
+                break
 
-        if all_words_match and not too_generic:
+        # Б. Противоречие по серии (Pro vs Base vs Pro Max)
+        # Если юзер указал конкретную серию, товар должен соответствовать
+        # Если юзер НЕ указал серию (base), а товар это Pro — это противоречие
+        if query_series != prod_series:
+            is_exact = False
+
+        # В. Противоречие по словам (цвета, бренды и прочее)
+        # Все НЕчисловые слова из запроса должны быть в названии
+        for word in query_words:
+            if not word.isdigit() and word not in prod_words:
+                is_exact = False
+                break
+
+        if is_exact and not too_generic:
             exact.append(product)
         else:
-            # считаем fuzzy score для похожих
-            score = fuzz.token_set_ratio(normalized, product_name_lower)
+            # если точного совпадения нет — считаем fuzzy score
+            score = fuzz.token_set_ratio(normalized, norm_product)
             if score >= 55:
                 similar.append({**product, 'score': score})
 
-    # фильтруем по типу SIM если указан
+    # фильтруем по SIM
     exact = _filter_by_sim(exact, sim_type)
     similar = _filter_by_sim(similar, sim_type)
 
-    # сортируем похожие по score (лучшие первыми)
     similar.sort(key=lambda x: x['score'], reverse=True)
-
-    # берем максимум 5 похожих
     similar = similar[:5]
 
     logger.info(f'  Точных: {len(exact)}, Похожих: {len(similar)}')
