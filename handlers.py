@@ -168,6 +168,15 @@ def register_handlers(client, source_bot, owner_username=None):
                     'similar': result['similar']
                 })
 
+        # дедупликация — убираем одинаковые товары
+        seen = set()
+        unique_found = []
+        for p in all_found:
+            if p['name'] not in seen:
+                seen.add(p['name'])
+                unique_found.append(p)
+        all_found = unique_found
+
         # отправляем юзеру ТОЛЬКО найденные товары
         if all_found and username:
             response = format_response(all_found)

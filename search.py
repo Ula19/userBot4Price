@@ -306,7 +306,10 @@ def find_products(query, sim_override=None):
     if not query_words:
         return {'exact': [], 'similar': []}
 
-    logger.info(f'Поиск: "{query}" → "{normalized}" (SIM: {sim_type or "любой"})')
+    # слишком общий запрос (1 слово вроде "blue") — только fuzzy, не exact
+    too_generic = len(query_words) < 2
+
+    logger.info(f'Поиск: "{query}" → "{" ".join(query_words)}" (SIM: {sim_type or "любой"})')
 
     exact = []
     similar = []
@@ -333,7 +336,7 @@ def find_products(query, sim_override=None):
             elif has_pro_query and not has_max_query and has_max_product:
                 all_words_match = False  # запрос pro, товар pro max
 
-        if all_words_match:
+        if all_words_match and not too_generic:
             exact.append(product)
         else:
             # считаем fuzzy score для похожих
