@@ -216,6 +216,9 @@ def normalize_query(text):
     """
     text = text.lower().strip()
 
+    # убираем невидимые юникод-символы (braille blanks и тп из ботов)
+    text = re.sub(r'[^\x00-\x7FА-Яа-яёЁ0-9]', ' ', text)
+
     # убираем эмодзи, знаки вопроса, восклицательные
     text = re.sub(r'[❗‼⁉❓?!]+', '', text)
 
