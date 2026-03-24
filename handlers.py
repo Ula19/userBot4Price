@@ -11,6 +11,9 @@ logger = logging.getLogger(__name__)
 # анти-спам кулдаун
 user_last_reply = {}
 
+# юзеры которым уже писали (для детекции нового чата без API)
+known_users = set()
+
 # московское время (UTC+3)
 MSK = timezone(timedelta(hours=3))
 
@@ -234,20 +237,15 @@ def register_handlers(client, source_bot, owner_username=None):
         if all_found and username:
             response = format_response(all_found)
             try:
-                # проверяем есть ли уже чат с юзером
-                is_new_chat = True
-                try:
-                    messages = await client.get_messages(username, limit=1)
-                    if messages:
-                        is_new_chat = False
-                except Exception:
-                    pass  # если не удалось проверить — считаем новым
+                # проверяем писали ли мы уже этому юзеру (без API вызовов)
+                is_new_user = username not in known_users
 
                 await client.send_message(username, response)
+                known_users.add(username)
 
-                if is_new_chat:
-                    # новый чат — не пишем "как дали", предупреждаем заказчика
-                    logger.info(f'  Ответ отправлен @{username} (НОВЫЙ чат, без "как дали")')
+                if is_new_user:
+                    # первый раз пишем — не шлём "как дали", предупреждаем заказчика
+                    logger.info(f'  Ответ отправлен @{username} (НОВЫЙ юзер, без "как дали")')
                     if owner_username:
                         try:
                             await client.send_message(

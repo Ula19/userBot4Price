@@ -51,14 +51,6 @@ async def on_price_edit(event):
     await examples.reload_examples()
 
 
-@client.on(events.MessageDeleted())
-async def on_message_deleted(event):
-    """отслеживаем удаления сообщений для дебага"""
-    chat_id = event.chat_id
-    msg_ids = event.deleted_ids
-    logger.warning(f'🗑️ Удалены сообщения: IDs={msg_ids}, chat_id={chat_id}')
-
-
 async def main():
     """запуск бота и авторизация"""
     await client.start(phone=PHONE)
