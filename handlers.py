@@ -165,8 +165,8 @@ def format_response(results):
 def register_handlers(client, source_bot, owner_username=None):
     """
     регистрирует обработчик сообщений от бота-источника
-    source_bot - username бота (без @)
-    owner_username - username заказчика для уведомлений (без @)
+    source_bot - числовой ID бота (резолвится один раз при запуске)
+    owner_username - числовой ID заказчика для уведомлений
     """
 
     @client.on(events.NewMessage(from_users=source_bot))

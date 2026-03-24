@@ -64,11 +64,26 @@ async def main():
     await aliases.load_aliases(client, PRICE_CHAT_ID)
     await examples.load_examples(client, PRICE_CHAT_ID)
 
-    # подключаем обработчик запросов от бота-источника
-    handlers.register_handlers(client, SOURCE_BOT, OWNER_USERNAME)
-    logger.info(f'Слушаю запросы от @{SOURCE_BOT}')
+    # резолвим username'ы в числовые ID (один раз при старте)
+    # это убирает ВСЕ ResolveUsernameRequest вызовы при обработке событий
+    source_entity = await client.get_input_entity(SOURCE_BOT)
+    source_id = source_entity.user_id
+    logger.info(f'Бот-источник: @{SOURCE_BOT} → ID {source_id}')
+
+    owner_id = None
     if OWNER_USERNAME:
-        logger.info(f'Уведомления о ненайденном → @{OWNER_USERNAME}')
+        try:
+            owner_entity = await client.get_input_entity(OWNER_USERNAME)
+            owner_id = owner_entity.user_id
+            logger.info(f'Заказчик: @{OWNER_USERNAME} → ID {owner_id}')
+        except Exception as e:
+            logger.error(f'Не удалось найти @{OWNER_USERNAME}: {e}')
+
+    # подключаем обработчик запросов от бота-источника
+    handlers.register_handlers(client, source_id, owner_id)
+    logger.info(f'Слушаю запросы от @{SOURCE_BOT} (ID: {source_id})')
+    if owner_id:
+        logger.info(f'Уведомления о ненайденном → @{OWNER_USERNAME} (ID: {owner_id})')
 
     logger.info('Для остановки нажми Ctrl+C')
 
