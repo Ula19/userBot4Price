@@ -260,9 +260,11 @@ def normalize_query(text):
     # нормализуем ТБ/TB (1тб → 1tb, 2тб → 2tb)
     text = re.sub(r'(\d+)\s*(?:тб|tb)', r'\1tb', text, flags=re.IGNORECASE)
 
-    # убираем количество: "2 шт", "3 штуки", "-3", "x5" и тд
+    # убираем количество: "2 шт", "3 штуки", "-3", "*2", "x5" и тд
     text = re.sub(r'\d+\s*(?:шт\w*|pcs|штук\w*)', '', text, flags=re.IGNORECASE)
-    text = re.sub(r'[\-]\s*\d+\b', '', text)  # -3, -5 (количество со знаком минус)
+    text = re.sub(r'[\-]\s*\d+\b', '', text)     # -3, -5
+    text = re.sub(r'[*×]\s*\d+\b', '', text)     # *2, ×5
+    text = re.sub(r'\b\d+\s*[*×]\b', '', text)   # 2*, 3×
 
     # убираем мусорные слова (apple, iphone, gb и тд)
     for word in STOP_WORDS:
