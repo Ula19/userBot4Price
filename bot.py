@@ -65,25 +65,34 @@ async def main():
     await examples.load_examples(client, PRICE_CHAT_ID)
 
     # резолвим username'ы в числовые ID (один раз при старте)
-    # это убирает ВСЕ ResolveUsernameRequest вызовы при обработке событий
-    source_entity = await client.get_input_entity(SOURCE_BOT)
-    source_id = source_entity.user_id
-    logger.info(f'Бот-источник: @{SOURCE_BOT} → ID {source_id}')
+    # если в .env уже числовой ID — используем напрямую (без API)
+    # если username — резолвим один раз
+    if SOURCE_BOT.isdigit():
+        source_id = int(SOURCE_BOT)
+        logger.info(f'Бот-источник: ID {source_id} (из .env)')
+    else:
+        source_entity = await client.get_input_entity(SOURCE_BOT)
+        source_id = source_entity.user_id
+        logger.info(f'Бот-источник: @{SOURCE_BOT} → ID {source_id}')
 
     owner_id = None
     if OWNER_USERNAME:
-        try:
-            owner_entity = await client.get_input_entity(OWNER_USERNAME)
-            owner_id = owner_entity.user_id
-            logger.info(f'Заказчик: @{OWNER_USERNAME} → ID {owner_id}')
-        except Exception as e:
-            logger.error(f'Не удалось найти @{OWNER_USERNAME}: {e}')
+        if OWNER_USERNAME.isdigit():
+            owner_id = int(OWNER_USERNAME)
+            logger.info(f'Заказчик: ID {owner_id} (из .env)')
+        else:
+            try:
+                owner_entity = await client.get_input_entity(OWNER_USERNAME)
+                owner_id = owner_entity.user_id
+                logger.info(f'Заказчик: @{OWNER_USERNAME} → ID {owner_id}')
+            except Exception as e:
+                logger.error(f'Не удалось найти @{OWNER_USERNAME}: {e}')
 
     # подключаем обработчик запросов от бота-источника
     handlers.register_handlers(client, source_id, owner_id)
-    logger.info(f'Слушаю запросы от @{SOURCE_BOT} (ID: {source_id})')
+    logger.info(f'Слушаю запросы от ID {source_id}')
     if owner_id:
-        logger.info(f'Уведомления о ненайденном → @{OWNER_USERNAME} (ID: {owner_id})')
+        logger.info(f'Уведомления о ненайденном → ID {owner_id}')
 
     logger.info('Для остановки нажми Ctrl+C')
 
