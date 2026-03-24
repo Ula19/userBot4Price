@@ -1,5 +1,6 @@
 import re
 import time
+import asyncio
 import logging
 from datetime import datetime, timezone, timedelta
 from telethon import events
@@ -234,6 +235,7 @@ def register_handlers(client, source_bot, owner_username=None):
             response = format_response(all_found)
             try:
                 await client.send_message(username, response)
+                await asyncio.sleep(3)
                 await client.send_message(username, 'как дали')
                 logger.info(f'  Ответ отправлен @{username}')
             except Exception as e:
