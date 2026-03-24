@@ -407,16 +407,10 @@ def find_products(query, sim_override=None):
             if score >= 55:
                 similar.append({**product, 'score': score})
 
-    # фильтруем по SIM (с fallback — если SIM убил все результаты, показываем без фильтра)
+    # фильтруем по SIM строго — если указан тип SIM, показываем только его
     if sim_type:
-        exact_filtered = _filter_by_sim(exact, sim_type)
-        similar_filtered = _filter_by_sim(similar, sim_type)
-        # если SIM-фильтр убил ВСЕ точные — показываем все SIM-варианты
-        if exact and not exact_filtered:
-            logger.info(f'  SIM-фильтр ({sim_type}) убил все результаты, показываю все SIM')
-        else:
-            exact = exact_filtered
-            similar = similar_filtered
+        exact = _filter_by_sim(exact, sim_type)
+        similar = _filter_by_sim(similar, sim_type)
 
     similar.sort(key=lambda x: x['score'], reverse=True)
     similar = similar[:5]

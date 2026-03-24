@@ -96,16 +96,18 @@ async def reload_examples():
 
 def find_by_example(normalized_query):
     """
-    ищет запрос в таблице примеров
-    normalized_query — уже нормализованный запрос (нижний регистр, без лишних пробелов)
+    ищет запрос в таблице примеров (только точное совпадение)
     возвращает название товара или None
     """
+    if not telegram_examples:
+        return None
+
     # убираем лишние пробелы и приводим к нижнему регистру
     query = ' '.join(normalized_query.lower().split())
 
     if query in telegram_examples:
         product_name = telegram_examples[query]
-        logger.info(f'  [Примеры] Найден: "{query}" → "{product_name}"')
+        logger.info(f'  [Примеры] Точный: "{query}" → "{product_name}"')
         return product_name
 
     return None
@@ -114,3 +116,4 @@ def find_by_example(normalized_query):
 def get_examples():
     """возвращает текущие примеры из Телеграма"""
     return telegram_examples
+
