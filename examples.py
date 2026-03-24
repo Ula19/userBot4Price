@@ -76,8 +76,8 @@ async def load_examples(client, chat_id):
 
     async for message in client.iter_messages(entity, limit=200):
         if message.text and (
-            '📝' in message.text and 'ПРИМЕР' in message.text.upper()
-        ):
+            'ПРИМЕР' in message.text.upper()
+        ) and '[' in message.text:
             found = parse_examples_message(message.text)
             telegram_examples.update(found)
 
