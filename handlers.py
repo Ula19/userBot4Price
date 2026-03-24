@@ -234,10 +234,34 @@ def register_handlers(client, source_bot, owner_username=None):
         if all_found and username:
             response = format_response(all_found)
             try:
+                # проверяем есть ли уже чат с юзером
+                is_new_chat = True
+                try:
+                    messages = await client.get_messages(username, limit=1)
+                    if messages:
+                        is_new_chat = False
+                except Exception:
+                    pass  # если не удалось проверить — считаем новым
+
                 await client.send_message(username, response)
-                await asyncio.sleep(3)
-                await client.send_message(username, 'как дали')
-                logger.info(f'  Ответ отправлен @{username}')
+
+                if is_new_chat:
+                    # новый чат — не пишем "как дали", предупреждаем заказчика
+                    logger.info(f'  Ответ отправлен @{username} (НОВЫЙ чат, без "как дали")')
+                    if owner_username:
+                        try:
+                            await client.send_message(
+                                owner_username,
+                                f'⚠️ Первое сообщение для @{username} — Telegram может удалить его как спам.'
+                            )
+                        except Exception:
+                            pass
+                else:
+                    # существующий чат — пишем "как дали"
+                    await asyncio.sleep(3)
+                    await client.send_message(username, 'как дали')
+                    logger.info(f'  Ответ отправлен @{username} (чат существует)')
+
             except Exception as e:
                 logger.error(f'  Не удалось отправить @{username}: {e}')
         elif not all_found:
