@@ -3,6 +3,7 @@ import logging
 from rapidfuzz import fuzz
 import price_parser
 import aliases as aliases_module
+import examples as examples_module
 
 logger = logging.getLogger(__name__)
 
@@ -316,6 +317,17 @@ def find_products(query, sim_override=None):
 
     if not products:
         return {'exact': [], 'similar': []}
+
+    # ШАГ 0: Fast Path — проверяем примеры заказчика
+    # если запрос совпал с примером — сразу отдаём товар
+    example_query = ' '.join(query.lower().split())
+    example_product_name = examples_module.find_by_example(example_query)
+    if example_product_name:
+        # ищем этот товар в прайсе чтобы вернуть с ценой
+        for p in products:
+            if p['name'].lower() == example_product_name.lower():
+                logger.info(f'Поиск: "{query}" → [Пример] → {p["name"]} — {p["price"]}')
+                return {'exact': [p], 'similar': []}
 
     # определяем SIM
     sim_type = sim_override or _detect_sim_type(query)

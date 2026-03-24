@@ -5,6 +5,7 @@ from telethon import TelegramClient, events
 import price_parser
 import handlers
 import aliases
+import examples
 
 # загружаем переменные из .env
 load_dotenv()
@@ -39,6 +40,7 @@ async def on_price_new(event):
     """новое сообщение в чате прайса - перезагружаем всё"""
     await price_parser.reload_prices()
     await aliases.reload_aliases()
+    await examples.reload_examples()
 
 
 @client.on(events.MessageEdited(chats='me' if PRICE_CHAT_ID == 'me' else int(PRICE_CHAT_ID)))
@@ -46,6 +48,7 @@ async def on_price_edit(event):
     """сообщение отредактировано в чате прайса - перезагружаем всё"""
     await price_parser.reload_prices()
     await aliases.reload_aliases()
+    await examples.reload_examples()
 
 
 @client.on(events.MessageDeleted())
@@ -67,6 +70,7 @@ async def main():
     # загружаем прайс-лист и алиасы при старте
     await price_parser.load_prices(client, PRICE_CHAT_ID)
     await aliases.load_aliases(client, PRICE_CHAT_ID)
+    await examples.load_examples(client, PRICE_CHAT_ID)
 
     # подключаем обработчик запросов от бота-источника
     handlers.register_handlers(client, SOURCE_BOT, OWNER_USERNAME)
