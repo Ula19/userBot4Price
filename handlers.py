@@ -241,9 +241,9 @@ def register_handlers(client, source_bot, owner_username=None):
                 # проверяем писали ли мы уже этому юзеру (без API вызовов)
                 is_new_user = username not in known_users
 
-                # Имитируем человека: ждём случайное время (от 10 до 15 секунд) перед ответом
+                # Имитируем человека: ждём случайное время (от 20 до 30 секунд) перед ответом
                 # Моментальный ответ — частая причина спам-бана
-                delay = random.uniform(10, 15)
+                delay = random.uniform(20, 30)
                 logger.info(f'  Жду {delay:.1f}с перед ответом @{username} (анти-спам)...')
                 await asyncio.sleep(delay)
 
@@ -257,8 +257,8 @@ def register_handlers(client, source_bot, owner_username=None):
                 known_users.add(username)
 
                 if is_new_user:
-                    # первый раз пишем — не шлём "как дали", предупреждаем заказчика
-                    logger.info(f'  Ответ отправлен @{username} (НОВЫЙ юзер, без "как дали")')
+                    # первый раз пишем — предупреждаем заказчика
+                    logger.info(f'  Ответ отправлен @{username} (НОВЫЙ юзер)')
                     if owner_username:
                         try:
                             await client.send_message(
@@ -268,9 +268,6 @@ def register_handlers(client, source_bot, owner_username=None):
                         except Exception:
                             pass
                 else:
-                    # существующий чат — пишем "как дали"
-                    await asyncio.sleep(3)
-                    await client.send_message(username, 'как дали')
                     logger.info(f'  Ответ отправлен @{username} (чат существует)')
 
             except Exception as e:
