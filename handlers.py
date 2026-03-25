@@ -1,5 +1,6 @@
 import re
 import time
+import random
 import asyncio
 import logging
 from datetime import datetime, timezone, timedelta
@@ -239,6 +240,12 @@ def register_handlers(client, source_bot, owner_username=None):
             try:
                 # проверяем писали ли мы уже этому юзеру (без API вызовов)
                 is_new_user = username not in known_users
+
+                # Имитируем человека: ждём случайное время (от 3 до 7 секунд) перед ответом
+                # Моментальный ответ — частая причина спам-бана
+                delay = random.uniform(3, 7)
+                logger.info(f'  Жду {delay:.1f}с перед ответом @{username} (анти-спам)...')
+                await asyncio.sleep(delay)
 
                 try:
                     await client.send_message(username, response)
