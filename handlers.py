@@ -241,9 +241,9 @@ def register_handlers(client, source_bot, owner_username=None):
                 # проверяем писали ли мы уже этому юзеру (без API вызовов)
                 is_new_user = username not in known_users
 
-                # Имитируем человека: ждём случайное время (от 3 до 7 секунд) перед ответом
+                # Имитируем человека: ждём случайное время (от 10 до 15 секунд) перед ответом
                 # Моментальный ответ — частая причина спам-бана
-                delay = random.uniform(3, 7)
+                delay = random.uniform(10, 15)
                 logger.info(f'  Жду {delay:.1f}с перед ответом @{username} (анти-спам)...')
                 await asyncio.sleep(delay)
 

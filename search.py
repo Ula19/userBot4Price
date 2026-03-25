@@ -413,16 +413,8 @@ def find_products(query, sim_override=None):
 
     # фильтруем по SIM строго — если указан тип SIM, показываем только его
     if sim_type:
-        filtered_exact = _filter_by_sim(exact, sim_type)
-        filtered_similar = _filter_by_sim(similar, sim_type)
-        
-        # fallback: если мы фильтровали по SIM и убили ВСЕ точные совпадения, но без фильтра они были -
-        # значит клиент просит SIM вариант которого у нас нет в прайсе. Возвращаем игнорируя SIM фильтр.
-        if exact and not filtered_exact:
-            logger.info(f'  SIM-фильтр ({sim_type}) отсёк всё. Fallback: показываем без фильтра.')
-        else:
-            exact = filtered_exact
-            similar = filtered_similar
+        exact = _filter_by_sim(exact, sim_type)
+        similar = _filter_by_sim(similar, sim_type)
 
     similar.sort(key=lambda x: x['score'], reverse=True)
     similar = similar[:5]
