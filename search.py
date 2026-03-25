@@ -25,6 +25,7 @@ ALIASES = {
     'белый': 'silver',       # в iPhone белый = silver
     'оранжевый': 'orange',
     'оранж': 'orange',
+    'оран': 'orange',
     'синий': 'blue',
     'блю': 'blue',
     'блу': 'blue',
@@ -248,6 +249,13 @@ def normalize_query(text):
     """
     text = text.lower().strip()
 
+    # убираем количество спецификаторы ДО очистки юникода (чтобы поймать символы вроде ⠀)
+    text = re.sub(r'\b\d+\s*(?:шт\w*|pcs|штук\w*|\u2800+)(?:\s|$)', ' ', text, flags=re.IGNORECASE)
+    text = re.sub(r'[\-]\s*\d+\b', '', text)     # -3, -5
+
+    # убираем слеш перед числами (например 17 /256 -> 17 256)
+    text = re.sub(r'/(?=\d+)', ' ', text)
+
     # убираем невидимые юникод-символы (braille blanks и тп из ботов)
     text = re.sub(r'[^\x00-\x7FА-Яа-яёЁ0-9]', ' ', text)
 
@@ -259,10 +267,6 @@ def normalize_query(text):
 
     # нормализуем ТБ/TB (1тб → 1tb, 2тб → 2tb)
     text = re.sub(r'(\d+)\s*(?:тб|tb)', r'\1tb', text, flags=re.IGNORECASE)
-
-    # убираем количество: "2 шт", "3 штуки", "-3", "*2", "x5" и тд
-    text = re.sub(r'\d+\s*(?:шт\w*|pcs|штук\w*)', '', text, flags=re.IGNORECASE)
-    text = re.sub(r'[\-]\s*\d+\b', '', text)     # -3, -5
     text = re.sub(r'[*×]\s*\d+\b', '', text)     # *2, ×5
     text = re.sub(r'\b\d+\s*[*×]\b', '', text)   # 2*, 3×
 
@@ -409,8 +413,16 @@ def find_products(query, sim_override=None):
 
     # фильтруем по SIM строго — если указан тип SIM, показываем только его
     if sim_type:
-        exact = _filter_by_sim(exact, sim_type)
-        similar = _filter_by_sim(similar, sim_type)
+        filtered_exact = _filter_by_sim(exact, sim_type)
+        filtered_similar = _filter_by_sim(similar, sim_type)
+        
+        # fallback: если мы фильтровали по SIM и убили ВСЕ точные совпадения, но без фильтра они были -
+        # значит клиент просит SIM вариант которого у нас нет в прайсе. Возвращаем игнорируя SIM фильтр.
+        if exact and not filtered_exact:
+            logger.info(f'  SIM-фильтр ({sim_type}) отсёк всё. Fallback: показываем без фильтра.')
+        else:
+            exact = filtered_exact
+            similar = filtered_similar
 
     similar.sort(key=lambda x: x['score'], reverse=True)
     similar = similar[:5]
