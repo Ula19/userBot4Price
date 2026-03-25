@@ -3,7 +3,7 @@ import time
 import asyncio
 import logging
 from datetime import datetime, timezone, timedelta
-from telethon import events
+from telethon import events, errors
 import search
 
 logger = logging.getLogger(__name__)
@@ -240,7 +240,13 @@ def register_handlers(client, source_bot, owner_username=None):
                 # проверяем писали ли мы уже этому юзеру (без API вызовов)
                 is_new_user = username not in known_users
 
-                await client.send_message(username, response)
+                try:
+                    await client.send_message(username, response)
+                except errors.FloodWaitError as e:
+                    logger.warning(f'  [Анти-спам] Телеграм просит подождать {e.seconds}с для @{username}. Жду...')
+                    await asyncio.sleep(e.seconds + 2)
+                    await client.send_message(username, response)
+                    
                 known_users.add(username)
 
                 if is_new_user:
