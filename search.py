@@ -61,6 +61,17 @@ STOP_WORDS = [
     'dual',  # "dual esim" = esim, само слово dual — мусор
 ]
 
+# Ключевые слова для специфичных уникальных товаров (адаптеры, конкретные дайсоны)
+# Ключ: триггер-фраза (нижний регистр). Значение: часть названия из прайса для поиска
+SPECIAL_KEYWORDS = {
+    '20w adapter': 'Адаптер Apple',
+    '20w apple': 'Адаптер Apple',
+    '20w': 'Адаптер Apple',
+    '20в': 'Адаптер Apple',
+    'v12s': 'Dyson V12s Detect Slim Submarine',
+    'v12': 'Dyson V12s Detect Slim Submarine',
+}
+
 # --- SIM-карты ---
 # паттерны для определения типа SIM карты из запроса юзера
 # порядок важен! проверяем от более специфичных к менее
@@ -334,6 +345,17 @@ def find_products(query, sim_override=None):
             if p['name'].lower() == example_product_name.lower():
                 logger.info(f'Поиск: "{query}" → [Пример] → {p["name"]} — {p["price"]}')
                 return {'exact': [p], 'similar': []}
+
+    # ШАГ 0.5: Fast Path — уникальные товары (адаптеры, конкретные дайсоны)
+    query_lower = query.lower()
+    for kw, prod_name in SPECIAL_KEYWORDS.items():
+        # ищем как отдельное слово, чтобы "20w" не совпало внутри "120w"
+        if re.search(r'\b' + re.escape(kw) + r'\b', query_lower) or kw in query_lower and ' ' in kw:
+            # ищем этот товар в прайсе
+            for p in products:
+                if prod_name.lower() in p['name'].lower():
+                    logger.info(f'Поиск: "{query}" → [Уникальный товар] → {p["name"]}')
+                    return {'exact': [p], 'similar': []}
 
     # определяем SIM
     sim_type = sim_override or _detect_sim_type(query)
