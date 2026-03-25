@@ -250,6 +250,10 @@ def register_handlers(client, source_bot, owner_username=None):
                 try:
                     await client.send_message(username, response)
                 except errors.FloodWaitError as e:
+                    if e.seconds > 300:
+                        # бан больше 5 минут — пропускаем, чтобы не блокировать бота
+                        logger.error(f'  [Анти-спам] Бан {e.seconds}с (~{e.seconds // 3600}ч) для @{username}. Пропускаем.')
+                        raise  # уйдёт в общий except ниже
                     logger.warning(f'  [Анти-спам] Телеграм просит подождать {e.seconds}с для @{username}. Жду...')
                     await asyncio.sleep(e.seconds + 2)
                     await client.send_message(username, response)
