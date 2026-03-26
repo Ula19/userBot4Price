@@ -8,6 +8,8 @@ import logging
 from datetime import datetime, timezone, timedelta
 from telethon import events, errors
 import search
+import ai_parser
+import price_parser
 
 logger = logging.getLogger(__name__)
 
@@ -236,21 +238,41 @@ def register_handlers(client, source_bot, owner_username=None):
         if shared_sim:
             logger.info(f'  Общий SIM: {shared_sim}')
 
-        # ищем цены по каждому запросу
+        # === ПОИСК ТОВАРОВ ===
+        # Сначала пробуем ИИ (OpenAI), если не получилось — старый поиск
         all_found = []
         notify_queries = []
+        used_ai = False
 
-        for query in queries:
-            result = search.find_products(query, sim_override=shared_sim)
+        # объединяем все запросы в один текст для ИИ
+        full_query = ', '.join(queries)
+        products = price_parser.get_all_products()
 
-            if result['exact']:
-                all_found.extend(result['exact'])
-            elif result['similar']:
-                # не нашли точно, но есть похожие - уведомить заказчика
-                notify_queries.append({
-                    'query': query,
-                    'similar': result['similar']
-                })
+        # ШАГ 1: пробуем ИИ
+        ai_result = await ai_parser.find_in_price(full_query, products)
+
+        if ai_result is not None:
+            # ИИ ответил
+            used_ai = True
+            for item in ai_result:
+                name = item.get('name', '')
+                price = item.get('price', '')
+                if name and price:
+                    all_found.append({'name': name, 'price': price})
+            logger.info(f'  [ИИ] Найдено: {len(all_found)} товар(ов)')
+        else:
+            # ШАГ 2: fallback на старый поиск
+            logger.info('  [Fallback] Используем старый поиск')
+            for query in queries:
+                result = search.find_products(query, sim_override=shared_sim)
+
+                if result['exact']:
+                    all_found.extend(result['exact'])
+                elif result['similar']:
+                    notify_queries.append({
+                        'query': query,
+                        'similar': result['similar']
+                    })
 
         # дедупликация — убираем одинаковые товары
         seen = set()
