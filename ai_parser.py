@@ -70,6 +70,12 @@ async def find_in_price(query, products):
 Найди подходящие товары из прайса."""
 
     try:
+        # === ВРЕМЕННЫЕ ЛОГИ (убрать перед деплоем) ===
+        logger.info(f'  [ИИ] >>> ОТПРАВЛЯЕМ В OpenAI:')
+        logger.info(f'  [ИИ] >>> Прайс: {len(products)} товаров')
+        logger.info(f'  [ИИ] >>> Запрос: "{query}"')
+        # === КОНЕЦ ВРЕМЕННЫХ ЛОГОВ ===
+
         response = _client.chat.completions.create(
             model='gpt-4o-mini',
             messages=[
@@ -82,6 +88,12 @@ async def find_in_price(query, products):
         )
 
         content = response.choices[0].message.content.strip()
+
+        # === ВРЕМЕННЫЕ ЛОГИ (убрать перед деплоем) ===
+        usage = response.usage
+        logger.info(f'  [ИИ] <<< Сырой ответ: {content}')
+        logger.info(f'  [ИИ] <<< Токены: вход={usage.prompt_tokens}, выход={usage.completion_tokens}, всего={usage.total_tokens}')
+        # === КОНЕЦ ВРЕМЕННЫХ ЛОГОВ ===
 
         # убираем markdown обёртку если ИИ добавил ```json ... ```
         if content.startswith('```'):
