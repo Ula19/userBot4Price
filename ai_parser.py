@@ -84,7 +84,7 @@ async def find_in_price(query, products):
             ],
             temperature=0,  # без креатива, строго по факту
             max_tokens=500,
-            timeout=10  # не ждём дольше 10 секунд
+            timeout=30  # не ждём дольше 30 секунд
         )
 
         content = response.choices[0].message.content.strip()
