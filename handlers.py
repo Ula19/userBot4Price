@@ -223,8 +223,8 @@ def register_handlers(client, source_bot, owner_username=None):
             now = time.time()
             if username in user_last_reply:
                 elapsed = now - user_last_reply[username]
-                if elapsed < 25:
-                    logger.warning(f'  [Анти-спам] Игнорируем запрос от @{username}. Прошло {int(elapsed)}с из 25с.')
+                if elapsed < 60:
+                    logger.warning(f'  [Анти-спам] Игнорируем запрос от @{username}. Прошло {int(elapsed)}с из 60с.')
                     return
             user_last_reply[username] = now
 
