@@ -14,6 +14,7 @@ COPY handlers.py .
 COPY ai_parser.py .
 COPY aliases.py .
 COPY examples.py .
+COPY test_bot_send.py .
 
 # запуск
 CMD ["python3", "bot.py"]
