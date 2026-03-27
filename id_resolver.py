@@ -95,12 +95,6 @@ async def _ask_bot(client, bot_username, target_username):
             if not messages:
                 continue
 
-            # === ДЕБАГ: показываем все сообщения (убрать после отладки) ===
-            if attempt == 0 or attempt == 5 or attempt == 19:
-                for i, m in enumerate(messages):
-                    logger.info(f'  [ID][DEBUG] msg[{i}] id={m.id} out={m.out} text="{(m.text or "")[:60]}"')
-            # === КОНЕЦ ДЕБАГА ===
-
             for msg in messages:
                 # пропускаем свои сообщения
                 if msg.out:
