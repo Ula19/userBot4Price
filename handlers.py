@@ -183,9 +183,11 @@ def register_handlers(client, source_bot, owner_username=None):
             return
 
         # проверяем рабочее время
-        if not is_work_time():
-            logger.info('Запрос вне рабочего времени, пропускаю')
-            return
+        # === ВРЕМЕННО ОТКЛЮЧЕНО ДЛЯ ТЕСТОВ ===
+        # if not is_work_time():
+        #     logger.info('Запрос вне рабочего времени, пропускаю')
+        #     return
+        # === КОНЕЦ ВРЕМЕННОГО ОТКЛЮЧЕНИЯ ===
 
         logger.info(f'Новый запрос от {source_bot}')
 

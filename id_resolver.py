@@ -22,6 +22,7 @@ USER_ID_CACHE_FILE = 'data/user_id_cache.json'
 
 # боты для резолва username → ID (в порядке приоритета)
 RESOLVER_BOTS = [
+    'giveme_id_bot',
     'raw_data_bot',
     'username_to_id_bot',
     'username_to_id_test_bot',
@@ -80,28 +81,42 @@ async def _ask_bot(client, bot_username, target_username):
     возвращает числовой ID или None
     """
     try:
-        # отправляем боту запрос
-        await client.send_message(bot_username, f'@{target_username}')
+        # отправляем боту запрос и запоминаем ID нашего сообщения
+        sent_msg = await client.send_message(bot_username, f'@{target_username}')
+        sent_id = sent_msg.id
+        logger.info(f'  [ID] Отправлено сообщение #{sent_id} боту @{bot_username}')
 
         # ждём ответ (максимум 10 секунд)
-        for _ in range(20):  # 20 * 0.5с = 10с
+        for attempt in range(20):  # 20 * 0.5с = 10с
             await asyncio.sleep(0.5)
 
-            # читаем последнее сообщение от бота
-            messages = await client.get_messages(bot_username, limit=1)
+            # читаем последние 5 сообщений (бот может прислать несколько)
+            messages = await client.get_messages(bot_username, limit=5)
             if not messages:
                 continue
 
-            msg = messages[0]
+            # === ДЕБАГ: показываем все сообщения (убрать после отладки) ===
+            if attempt == 0 or attempt == 5 or attempt == 19:
+                for i, m in enumerate(messages):
+                    logger.info(f'  [ID][DEBUG] msg[{i}] id={m.id} out={m.out} text="{(m.text or "")[:60]}"')
+            # === КОНЕЦ ДЕБАГА ===
 
-            # проверяем что это ответ (не наше собственное сообщение)
-            if msg.out:
-                continue
+            for msg in messages:
+                # пропускаем свои сообщения
+                if msg.out:
+                    continue
 
-            # пробуем распарсить ID
-            user_id = _parse_id_from_response(msg.text or '')
-            if user_id:
-                return user_id
+                # пропускаем сообщения до нашего запроса (старые)
+                if msg.id <= sent_id:
+                    continue
+
+                # пробуем распарсить ID
+                text = msg.text or ''
+
+                user_id = _parse_id_from_response(text)
+                if user_id:
+                    logger.info(f'  [ID] @{bot_username} ответил: "{text[:80]}"')
+                    return user_id
 
         return None
 
