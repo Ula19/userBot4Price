@@ -261,6 +261,9 @@ def register_handlers(client, source_bot, owner_username=None):
 
                 # отправляем по числовому ID (без ResolveUsernameRequest!)
                 try:
+                    logger.info(f'  Имитирую набор текста для @{username} (4с)...')
+                    async with client.action(user_id, 'typing'):
+                        await asyncio.sleep(4)
                     await client.send_message(user_id, response)
                 except errors.FloodWaitError as e:
                     if e.seconds > 300:
