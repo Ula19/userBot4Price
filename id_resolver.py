@@ -78,39 +78,48 @@ def _parse_id_from_response(text):
 async def _ask_bot(client, bot_username, target_username):
     """
     отправляет @username боту и ждёт ответ с ID
+    использует событийный подход (event handler) вместо поллинга
     возвращает числовой ID или None
     """
+    from telethon import events
+
+    result = {'user_id': None, 'text': ''}
+    got_response = asyncio.Event()
+
+    async def on_bot_response(event):
+        """обработчик входящего сообщения от бота"""
+        text = event.text or ''
+        logger.info(f'  [ID][EVENT] Получено от @{bot_username}: "{text[:80]}"')
+
+        user_id = _parse_id_from_response(text)
+        if user_id:
+            result['user_id'] = user_id
+            result['text'] = text
+            got_response.set()
+
     try:
-        # отправляем боту запрос и запоминаем ID нашего сообщения
+        # регистрируем обработчик ПЕРЕД отправкой
+        handler = client.add_event_handler(
+            on_bot_response,
+            events.NewMessage(from_users=bot_username, incoming=True)
+        )
+
+        # отправляем боту запрос
         sent_msg = await client.send_message(bot_username, f'@{target_username}')
-        sent_id = sent_msg.id
-        logger.info(f'  [ID] Отправлено сообщение #{sent_id} боту @{bot_username}')
+        logger.info(f'  [ID] Отправлено сообщение #{sent_msg.id} боту @{bot_username}')
 
-        # ждём ответ (максимум 10 секунд)
-        for attempt in range(20):  # 20 * 0.5с = 10с
-            await asyncio.sleep(0.5)
+        # ждём ответ (максимум 15 секунд)
+        try:
+            await asyncio.wait_for(got_response.wait(), timeout=15)
+        except asyncio.TimeoutError:
+            logger.warning(f'  [ID] Таймаут 15с — @{bot_username} не прислал ID')
 
-            # читаем последние 5 сообщений (бот может прислать несколько)
-            messages = await client.get_messages(bot_username, limit=5)
-            if not messages:
-                continue
+        # убираем обработчик
+        client.remove_event_handler(handler)
 
-            for msg in messages:
-                # пропускаем свои сообщения
-                if msg.out:
-                    continue
-
-                # пропускаем сообщения до нашего запроса (старые)
-                if msg.id <= sent_id:
-                    continue
-
-                # пробуем распарсить ID
-                text = msg.text or ''
-
-                user_id = _parse_id_from_response(text)
-                if user_id:
-                    logger.info(f'  [ID] @{bot_username} ответил: "{text[:80]}"')
-                    return user_id
+        if result['user_id']:
+            logger.info(f'  [ID] @{bot_username} ответил: "{result["text"][:80]}"')
+            return result['user_id']
 
         return None
 
