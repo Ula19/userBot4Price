@@ -246,9 +246,9 @@ def register_handlers(client, source_bot, owner_username=None):
                 # проверяем писали ли мы уже этому юзеру (без API вызовов)
                 is_new_user = username not in known_users
 
-                # Имитируем человека: ждём случайное время (от 20 до 30 секунд) перед ответом
+                # Имитируем человека: ждём случайное время перед ответом
                 # Моментальный ответ — частая причина спам-бана
-                delay = random.uniform(20, 30)
+                delay = random.uniform(30, 90)
                 logger.info(f'  Жду {delay:.1f}с перед ответом @{username} (анти-спам)...')
                 await asyncio.sleep(delay)
 
@@ -261,7 +261,7 @@ def register_handlers(client, source_bot, owner_username=None):
 
                 # отправляем по числовому ID (без ResolveUsernameRequest!)
                 try:
-                    typing_time = random.uniform(5, 10)
+                    typing_time = random.uniform(10, 30)
                     logger.info(f'  Имитирую набор текста для @{username} ({typing_time:.1f}с)...')
                     async with client.action(user_id, 'typing'):
                         await asyncio.sleep(typing_time)
