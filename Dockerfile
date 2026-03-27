@@ -11,6 +11,7 @@ COPY bot.py .
 COPY price_parser.py .
 COPY search.py .
 COPY handlers.py .
+COPY id_resolver.py .
 COPY aliases.py .
 COPY examples.py .
 

@@ -8,6 +8,7 @@ import logging
 from datetime import datetime, timezone, timedelta
 from telethon import events, errors
 import search
+import id_resolver
 
 logger = logging.getLogger(__name__)
 
@@ -17,30 +18,7 @@ user_last_reply = {}
 # юзеры которым уже писали (для детекции нового чата без API)
 known_users = set()
 
-# кэш username → числовой ID (убирает ResolveUsernameRequest для повторных клиентов)
-USER_ID_CACHE_FILE = 'data/user_id_cache.json'
-
-def _load_id_cache():
-    """Loads the username→ID cache from disk."""
-    if os.path.exists(USER_ID_CACHE_FILE):
-        try:
-            with open(USER_ID_CACHE_FILE, 'r') as f:
-                return json.load(f)
-        except Exception:
-            pass
-    return {}
-
-def _save_id_cache(cache):
-    """Saves the username→ID cache to disk."""
-    try:
-        os.makedirs(os.path.dirname(USER_ID_CACHE_FILE), exist_ok=True)
-        with open(USER_ID_CACHE_FILE, 'w') as f:
-            json.dump(cache, f)
-    except Exception:
-        pass
-
-user_id_cache = _load_id_cache()
-logger.info(f'Кэш ID загружен: {len(user_id_cache)} юзеров')
+# кэш username → числовой ID (управляется через id_resolver)
 
 # московское время (UTC+3)
 MSK = timezone(timedelta(hours=3))
@@ -274,36 +252,27 @@ def register_handlers(client, source_bot, owner_username=None):
                 logger.info(f'  Жду {delay:.1f}с перед ответом @{username} (анти-спам)...')
                 await asyncio.sleep(delay)
 
-                # Определяем кому отправлять: ID из кэша (без API) или username (с API)
-                recipient = user_id_cache.get(username, username)
-                if recipient != username:
-                    logger.info(f'  Кэш: @{username} → ID {recipient}')
+                # Получаем числовой ID через цепочку fallback
+                user_id, source = await id_resolver.resolve_user_id(client, username)
 
+                if user_id is None:
+                    logger.error(f'  Не удалось получить ID для @{username}, пропускаем')
+                    return
+
+                # отправляем по числовому ID (без ResolveUsernameRequest!)
                 try:
-                    await client.send_message(recipient, response)
+                    await client.send_message(user_id, response)
                 except errors.FloodWaitError as e:
                     if e.seconds > 300:
-                        # бан больше 5 минут — пропускаем, чтобы не блокировать бота
                         logger.error(f'  [Анти-спам] Бан {e.seconds}с (~{e.seconds // 3600}ч) для @{username}. Пропускаем.')
-                        raise  # уйдёт в общий except ниже
+                        raise
                     logger.warning(f'  [Анти-спам] Телеграм просит подождать {e.seconds}с для @{username}. Жду...')
                     await asyncio.sleep(e.seconds + 2)
-                    await client.send_message(recipient, response)
+                    await client.send_message(user_id, response)
 
-                # кэшируем ID после успешной отправки (если ещё не в кэше)
-                if username not in user_id_cache:
-                    try:
-                        entity = await client.get_input_entity(username)
-                        user_id_cache[username] = entity.user_id
-                        _save_id_cache(user_id_cache)
-                        logger.info(f'  Кэш обновлён: @{username} → {entity.user_id}')
-                    except Exception:
-                        pass  # не смогли закэшировать — не страшно
-                    
                 known_users.add(username)
 
                 if is_new_user:
-                    # первый раз пишем — предупреждаем заказчика
                     logger.info(f'  Ответ отправлен @{username} (НОВЫЙ юзер)')
                     if owner_username:
                         try:
