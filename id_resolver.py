@@ -68,7 +68,20 @@ def _parse_id_from_response(text):
     """
     парсит числовой ID из ответа бота
     ищет паттерн 'id: 123456' в тексте
+    отклоняет каналы (channel) — нам нужны только юзеры (user)
     """
+    # пропускаем ответы про каналы — мы не можем им писать
+    if '(channel)' in text.lower():
+        return None
+
+    # пропускаем "Searching..." и прочие промежуточные сообщения
+    if '⏳' in text or 'searching' in text.lower() or 'ищу' in text.lower():
+        return None
+
+    # пропускаем сообщения о лимитах
+    if 'лимит' in text.lower() or 'limit' in text.lower():
+        return None
+
     match = re.search(r'id:\s*(\d+)', text, re.IGNORECASE)
     if match:
         return int(match.group(1))
@@ -89,20 +102,17 @@ async def _ask_bot(client, bot_username, target_username):
     async def on_bot_response(event):
         """обработчик входящего сообщения от бота"""
         text = event.text or ''
-        logger.info(f'  [ID][EVENT] Получено от @{bot_username}: "{text[:80]}"')
-
         user_id = _parse_id_from_response(text)
         if user_id:
             result['user_id'] = user_id
             result['text'] = text
             got_response.set()
 
+    event_filter = events.NewMessage(from_users=bot_username, incoming=True)
+
     try:
         # регистрируем обработчик ПЕРЕД отправкой
-        handler = client.add_event_handler(
-            on_bot_response,
-            events.NewMessage(from_users=bot_username, incoming=True)
-        )
+        client.add_event_handler(on_bot_response, event_filter)
 
         # отправляем боту запрос
         sent_msg = await client.send_message(bot_username, f'@{target_username}')
@@ -113,9 +123,6 @@ async def _ask_bot(client, bot_username, target_username):
             await asyncio.wait_for(got_response.wait(), timeout=15)
         except asyncio.TimeoutError:
             logger.warning(f'  [ID] Таймаут 15с — @{bot_username} не прислал ID')
-
-        # убираем обработчик
-        client.remove_event_handler(handler)
 
         if result['user_id']:
             logger.info(f'  [ID] @{bot_username} ответил: "{result["text"][:80]}"')
@@ -129,6 +136,9 @@ async def _ask_bot(client, bot_username, target_username):
     except Exception as e:
         logger.warning(f'  [ID] Ошибка @{bot_username}: {e}')
         return None
+    finally:
+        # ВСЕГДА убираем обработчик (даже при ошибке)
+        client.remove_event_handler(on_bot_response, event_filter)
 
 
 async def _resolve_via_api(client, username):
