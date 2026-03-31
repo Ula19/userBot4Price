@@ -17,6 +17,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# убираем мусорные INFO-логи Telethon (Got difference, Connecting, etc.)
+logging.getLogger('telethon').setLevel(logging.WARNING)
+
 # читаем настройки из .env
 API_ID = int(os.getenv('API_ID'))
 API_HASH = os.getenv('API_HASH')
