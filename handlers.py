@@ -159,13 +159,26 @@ def format_response(results):
     форматирует ответ юзеру
     возвращает только НАЙДЕННЫЕ товары (без ❌ сообщений)
     формат как в прайсе, без количества
+    случайно выбирает один из 3 шаблонов обёртки
     """
     lines = []
 
     for product in results:
         lines.append(f'{product["name"]} — {product["price"]}')
 
-    return '\n'.join(lines) if lines else None
+    if not lines:
+        return None
+
+    price_text = '\n'.join(lines)
+
+    # случайный шаблон обёртки
+    template = random.randint(1, 3)
+    if template == 1:
+        return f'{price_text}\n\nкак дали?'
+    elif template == 2:
+        return f'В наличии:\n\n{price_text}'
+    else:
+        return f'{price_text}\n\nИнтересно?'
 
 
 def register_handlers(client, source_bot, owner_username=None):
