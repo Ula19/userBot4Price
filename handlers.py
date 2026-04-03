@@ -149,6 +149,24 @@ def _expand_slash_options(query):
     return result
 
 
+# SIM-ключевые слова (вынесено сюда после рефакторинга search.py)
+_SIM_PATTERNS = {
+    'sim_esim': ['sim+esim', 'sim/esim', 'dual sim', 'sim esim', 'simesim'],
+    'esim':     ['esim', 'e-sim', 'е-сим', 'есим'],
+    'sim':      ['sim', 'сим', '1sim', '2sim', 'dualsim'],
+}
+
+
+def _local_detect_sim_type(text):
+    """Определяет тип SIM из строки. Возвращает 'esim'/'sim'/'sim_esim' или None."""
+    t = text.lower().strip()
+    for sim_type, keywords in _SIM_PATTERNS.items():
+        for kw in keywords:
+            if kw in t:
+                return sim_type
+    return None
+
+
 def _detect_shared_sim(queries):
     """
     проверяет не является ли последний элемент типом SIM для всех запросов
@@ -159,14 +177,13 @@ def _detect_shared_sim(queries):
         return queries, None
 
     last = queries[-1].lower().strip()
-    sim_type = search._detect_sim_type(last)
+    sim_type = _local_detect_sim_type(last)
 
     if sim_type:
-        # проверяем что последний элемент - ТОЛЬКО SIM тип (не товар)
-        clean = search._remove_sim_words(last)
-        clean = search.normalize_query(clean)
-        if not clean.strip():
-            # последний элемент - чисто SIM тип, применяем ко всем
+        # убираем SIM-слова и проверяем что больше ничего не осталось
+        cleaned = re.sub(r'(esim|e-sim|sim|сим|есим|\+|/|-)', '', last).strip()
+        if not cleaned:
+            # последний элемент — чисто SIM тип, применяем ко всем
             return queries[:-1], sim_type
 
     return queries, None
