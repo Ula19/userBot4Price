@@ -326,7 +326,7 @@ def register_handlers(client, source_bot, owner_username=None):
 
                 # Имитируем человека: ждём случайное время перед ответом
                 # Моментальный ответ — частая причина спам-бана
-                delay = random.uniform(30, 90)
+                delay = random.uniform(20, 50)
                 logger.info(f'  Жду {delay:.1f}с перед ответом @{username} (анти-спам)...')
                 await asyncio.sleep(delay)
 
@@ -342,7 +342,7 @@ def register_handlers(client, source_bot, owner_username=None):
                 recipient = user_id
 
                 try:
-                    typing_time = random.uniform(10, 30)
+                    typing_time = random.uniform(10, 20)
                     logger.info(f'  Имитирую набор текста для @{username} ({typing_time:.1f}с)...')
                     async with client.action(recipient, 'typing'):
                         await asyncio.sleep(typing_time)
