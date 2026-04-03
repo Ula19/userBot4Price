@@ -9,6 +9,7 @@ from datetime import datetime, timezone, timedelta
 from telethon import events, errors
 import search
 import id_resolver
+import ai_parser
 
 logger = logging.getLogger(__name__)
 
@@ -18,7 +19,24 @@ user_last_reply = {}
 # юзеры которым уже писали (для детекции нового чата без API)
 known_users = set()
 
-# кэш username → числовой ID (управляется через id_resolver)
+# флаги стран → тип SIM (только для iPhone)
+FLAG_TO_SIM = {
+    '🇭🇰': 'sim_esim',   # Hong Kong — Sim + eSim
+    '🇨🇳': 'sim_sim',    # China — Dual SIM
+    '🇺🇸': 'esim',       # USA — eSIM only
+    '🇯🇵': 'esim',       # Japan — eSIM only
+    '🇪🇺': 'sim_esim',   # EU — Sim + eSim
+    '🇷🇺': 'sim_esim',   # Russia — Sim + eSim
+}
+
+
+def _detect_flag_sim(text):
+    """Ищет флаг страны в тексте и возвращает соответствующий тип SIM."""
+    for flag, sim_type in FLAG_TO_SIM.items():
+        if flag in text:
+            return sim_type
+    return None
+
 
 # московское время (UTC+3)
 MSK = timezone(timedelta(hours=3))
@@ -227,21 +245,49 @@ def register_handlers(client, source_bot, owner_username=None):
         if shared_sim:
             logger.info(f'  Общий SIM: {shared_sim}')
 
-        # ищем цены по каждому запросу
+        # === ПОИСК ТОВАРОВ ===
         all_found = []
         notify_queries = []
 
-        for query in queries:
-            result = search.find_products(query, sim_override=shared_sim)
+        # ШАГ 1: нормализуем запрос через ИИ
+        full_query = '\n'.join(queries)
+        normalized = await ai_parser.normalize_queries(full_query)
 
-            if result['exact']:
-                all_found.extend(result['exact'])
-            elif result['similar']:
-                # не нашли точно, но есть похожие - уведомить заказчика
-                notify_queries.append({
-                    'query': query,
-                    'similar': result['similar']
-                })
+        if normalized is not None:
+            # Проверяем флаги стран → SIM-тип (только для iPhone)
+            flag_sim = _detect_flag_sim(text)
+            if flag_sim:
+                logger.info(f'  [Флаг] Обнаружен флаг → SIM: {flag_sim}')
+
+            for item in normalized:
+                # Флаг применяется только к iPhone и только если AI не определил SIM
+                if flag_sim and not item.get('sim'):
+                    model = item.get('model', '').lower()
+                    if re.match(r'^\d', model):
+                        item['sim'] = flag_sim
+                        logger.info(f'  [Флаг] Применяем SIM={flag_sim} к {item["model"]}')
+
+                result = search.find_by_normalized(item)
+                if result['exact']:
+                    all_found.extend(result['exact'])
+                elif result['similar']:
+                    notify_queries.append({
+                        'query': ai_parser.build_search_query(item),
+                        'similar': result['similar']
+                    })
+        else:
+            # AI недоступен — уведомляем владельца
+            logger.error('  [AI] OpenAI недоступен! Уведомляем владельца.')
+            if owner_username:
+                try:
+                    await client.send_message(
+                        owner_username,
+                        '🚨 AI-нормализатор недоступен!\n'
+                        f'Запрос от @{username or "неизвестен"} не обработан.\n'
+                        'Проверьте OPENAI_API_KEY и соединение.'
+                    )
+                except Exception:
+                    pass
 
         # дедупликация — убираем одинаковые товары
         seen = set()

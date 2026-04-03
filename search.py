@@ -2,445 +2,452 @@ import re
 import logging
 from rapidfuzz import fuzz
 import price_parser
-import aliases as aliases_module
-import examples as examples_module
 
 logger = logging.getLogger(__name__)
 
-# базовые алиасы (захардкожены)
-# заказчик может добавить свои через Телеграм
-ALIASES = {
-    'айфон': 'iphone',
-    'про': 'pro',
-    'п': 'pro',
-    'макс': 'max',
-    'мах': 'max',
-    'дайсон': 'dyson',
-    'редми': 'redmi',
-    # цвета - полные и короткие
-    'серебро': 'silver',
-    'серебряный': 'silver',
-    'сильвер': 'silver',
-    'вайт': 'silver',       # в iPhone white = silver
-    'белый': 'silver',       # в iPhone белый = silver
-    'оранжевый': 'orange',
-    'оранж': 'orange',
-    'оран': 'orange',
-    'синий': 'blue',
-    'блю': 'blue',
-    'блу': 'blue',
-    'голубой': 'blue',
-    'черный': 'black',
-    'черн': 'black',
-    'блек': 'black',
-    'блэк': 'black',
-    'золотой': 'gold',
-    'золото': 'gold',
-    'лавандовый': 'lavender',
-    'лаванда': 'lavender',
-    'лавандер': 'lavender',
-    'зеленый': 'green',
-    'розовый': 'pink',
-    'черн': 'black',
-}
+# ═══════════════════════════════════════════════════════════════════
+# НОВЫЙ ПОИСК: Структурный поиск по нормализованному JSON от AI
+# ═══════════════════════════════════════════════════════════════════
 
-# многословные алиасы (обрабатываются ДО однословных)
-MULTI_WORD_ALIASES = {
-    'п м': 'pro max',
-    'пм': 'pro max',
+# Маппинг цветов iPhone: маркетинговые/нестандартные → как в нашем прайсе
+# Ключ: что может вернуть AI (lowercase). Значение: что реально есть в прайсе (lowercase).
+IPHONE_COLOR_MAP = {
+    # === iPhone 17 Pro / Pro Max (офиц: Cosmic Orange, Deep Blue, Silver) ===
+    'blue': 'blue',
     'deep blue': 'blue',
+    'mist blue': 'blue',
+    'orange': 'orange',
     'cosmic orange': 'orange',
+    'silver': 'silver',
+
+    # === iPhone 17 base (офиц: Black, White, Mist Blue, Sage, Lavender) ===
+    'white': 'white',
+    'black': 'black',
+    'lavender': 'lavender',
+    'sage': 'sage',
+
+    # === Общие маркетинговые синонимы ===
+    'space black': 'black',
+    'midnight': 'black',
+    'midnight black': 'black',
+    'starlight': 'white',
+    'natural titanium': 'silver',
+    'titanium': 'silver',
+    'gray': 'silver',
+    'grey': 'silver',
+
+    # === Прошлые поколения (могут попасть в прайс) ===
+    'green': 'green',
+    'pink': 'pink',
+    'rose': 'pink',
+    'gold': 'gold',
+    'purple': 'purple',
+    'deep purple': 'purple',
+    'red': 'red',
+    'product red': 'red',
+    'yellow': 'yellow',
 }
 
-# слова которые нужно убрать из запроса (мусор)
-STOP_WORDS = [
-    'куплю', 'купить', 'нужен', 'нужна', 'нужно',
-    'предложите', 'есть', 'ищу', 'хочу', 'надо',
-    'цвет', 'по', 'наличию',
-    'apple', 'iphone', 'gb', 'гб',
-    'dual',  # "dual esim" = esim, само слово dual — мусор
-]
 
-# Ключевые слова для специфичных уникальных товаров (адаптеры, конкретные дайсоны)
-# Ключ: триггер-фраза (нижний регистр). Значение: часть названия из прайса для поиска
-SPECIAL_KEYWORDS = {
-    '20w adapter': 'Адаптер Apple',
-    '20w apple': 'Адаптер Apple',
-    '20w': 'Адаптер Apple',
-    '20в': 'Адаптер Apple',
-    'v12s': 'Dyson V12s Detect Slim Submarine',
-    'v12': 'Dyson V12s Detect Slim Submarine',
-}
-
-# --- SIM-карты ---
-# паттерны для определения типа SIM карты из запроса юзера
-# порядок важен! проверяем от более специфичных к менее
-
-# (eSim) — только виртуальные сим карты
-ESIM_PATTERNS = [
-    r'dual\s*esim',         # dual esim
-    r'dual\s*есим',         # dual есим
-    r'есим[\s\-]*есим',     # есим-есим, есим есим
-    r'esim[\s\-]*esim',     # esim-esim, esim esim
-    r'2\s*esim',            # 2esim, 2 esim
-    r'2\s*есим',            # 2есим, 2 есим
-    r'2\s*е[\s\-]*сим',     # 2е-сим, 2 е сим, 2е сим
-    r'2\s*e[\s\-]*sim',     # 2e-sim, 2 e sim
-    r'2\s*вирт',            # 2вирт
-    r'\bе[\s\-]сим\b',      # е-сим, е сим
-    r'\be[\s\-]sim\b',      # e-sim, e sim
-    r'\bесим\b',            # есим
-    r'\besim\b',            # esim
-    r'\bвирт\b',            # вирт
-]
-
-# (Sim Sim) — две физические сим карты
-SIM_SIM_PATTERNS = [
-    r'сим[\s\-]*сим',       # сим-сим, сим сим
-    r'sim[\s\-]*sim',       # sim-sim, sim sim
-    r'2\s*сим',             # 2сим, 2 сим
-    r'2\s*sim',             # 2sim, 2 sim
-    r'2\s*физ',             # 2физ, 2 физ
-    r'2\s*nano',            # 2nano, 2 nano
-    r'2\s*nano[\s\-]*sim',  # 2nano-sim, 2nano sim
-    r'дуал[\s\-]*сим',      # дуал-сим, дуал сим
-    r'dual[\s\-]*sim',      # dual-sim, dual sim
-]
-
-# (Sim eSim) — одна физическая + одна виртуальная
-SIM_ESIM_PATTERNS = [
-    r'sim[\s\-]*e\s*sim',   # sim-esim, sim esim, sim-e sim, sim e sim
-    r'sim[\s\-]*есим',      # sim-есим, sim есим
-    r'сим[\s\-]*е\s*сим',   # сим-есим, сим есим
-    r'сим[\s\-]*физ',       # сим-физ
-    r'физ[\s\-]*сим',       # физ-сим, физ сим
-    r'физическ\w*\s*сим',   # физическая сим карта, физическая сим
-    r'nano[\s\-]*sim',      # nano-sim, nano sim
-    r'1\s*сим',             # 1сим, 1 сим
-    r'1\s*sim',             # 1sim, 1 sim
-    r'1\s*физ',             # 1физ
-    # одиночные — если просто "сим" или "sim" без цифр и пар
-    r'\bсим\b',             # сим
-    r'\bsim\b',             # sim
-    r'\bфиз\b',             # физ
-]
-
-# одиночные esim паттерны — НЕ должны ловить sim-esim
-ESIM_SINGLE_PATTERNS = [
-    r'(?<!sim[\s\-])е[\s\-]*сим',    # е-сим, е сим (но не сим-есим)
-    r'(?<!sim[\s\-])e[\s\-]*sim',     # e-sim, e sim (но не sim-esim)
-    r'(?<!\w)есим(?!\w)',             # есим (отдельное слово)
-    r'(?<!\w)esim(?!\w)',             # esim (отдельное слово)
-    r'\bвирт\b',                      # вирт
-]
+def _detect_category(model: str) -> str:
+    """Определяет категорию товара по полю model из AI-ответа."""
+    m = model.lower().strip()
+    if m.startswith('dyson'):                           return 'dyson'
+    if m.startswith('redmi') or m.startswith('xiaomi'):  return 'redmi'
+    if m.startswith('macbook'):                          return 'macbook'
+    # Samsung: A-серия (A07, A36), S-серия (S25, S25 Ultra), Galaxy/Samsung префикс
+    if re.match(r'^[as]\d', m) or 'galaxy' in m or 'samsung' in m:
+        return 'samsung'
+    if re.match(r'^\d', m):                             return 'iphone'
+    if 'adapter' in m or 'адаптер' in m or re.search(r'\d+w', m, re.IGNORECASE):
+        return 'adapter'
+    return 'generic'
 
 
-def _detect_sim_type(text):
+def _detect_product_category(name: str) -> str:
+    """Определяет категорию товара из прайса по его названию."""
+    n = name.lower().strip()
+    if n.startswith('dyson'):                           return 'dyson'
+    if n.startswith('redmi') or n.startswith('xiaomi'):  return 'redmi'
+    if n.startswith('macbook'):                          return 'macbook'
+    # Samsung: A-серия и S-серия, Galaxy/Samsung префикс
+    if re.match(r'^[as]\d', n) or n.startswith('galaxy') or n.startswith('samsung'):
+        return 'samsung'
+    if re.match(r'^\d', n):                             return 'iphone'
+    if 'адаптер' in n:                                  return 'adapter'
+    return 'generic'
+
+
+def _normalize_iphone_color(color):
+    """Нормализует цвет iPhone к формату прайса через IPHONE_COLOR_MAP."""
+    if not color:
+        return None
+    return IPHONE_COLOR_MAP.get(color.lower(), color.lower())
+
+
+def _parse_iphone_product(name):
     """
-    определяет какой тип SIM ищет юзер
-    проверяем от более специфичных паттернов к менее
+    Парсит название iPhone из прайса.
+    '17 Pro 256 Blue (eSim)' → {num:'17', series:'pro', storage:'256', color:'blue', sim:'esim'}
+    '17 Pro Max 256 Orange (Sim eSim)' → {num:'17', series:'pro_max', storage:'256', color:'orange', sim:'sim_esim'}
     """
-    text = text.lower()
+    # Шаг 1: извлечь SIM из скобок
+    sim = None
+    sim_match = re.search(r'\(([^)]+)\)', name)
+    if sim_match:
+        sim_text = sim_match.group(1).lower().replace(' ', '')
+        if 'simesim' in sim_text:
+            sim = 'sim_esim'
+        elif 'dualsim' in sim_text or 'simsim' in sim_text:
+            sim = 'sim_sim'
+        elif 'esim' in sim_text:
+            sim = 'esim'
+        name = name[:sim_match.start()].strip()
 
-    # 0. SIM+eSIM compound (sim-esim, sim+esim, 1sim+e-sim) — САМЫЙ ПЕРВЫЙ!
-    # иначе \besim\b словит esim внутри sim-esim
-    if re.search(r'\d*sim[\s\-\+]*e[\s\-]*sim|\d*сим[\s\-\+]*е[\s\-]*сим|\d*sim[\s\-\+]*есим', text):
-        return 'sim_esim'
-
-    # 1. двойные eSIM (2esim, есим-есим и тд)
-    for pattern in ESIM_PATTERNS:
-        if re.search(pattern, text):
-            return 'esim'
-
-    # 2. двойные физические SIM (2сим, сим-сим и тд)
-    for pattern in SIM_SIM_PATTERNS:
-        if re.search(pattern, text):
-            return 'sim_sim'
-
-    # 3. SIM+eSIM — остальные (физ-сим, nano-sim, просто сим и тд)
-    for pattern in SIM_ESIM_PATTERNS:
-        if re.search(pattern, text):
-            return 'sim_esim'
-
-    # 4. одиночные eSIM (только если ничего выше не сработало)
-    for pattern in ESIM_SINGLE_PATTERNS:
-        if re.search(pattern, text):
-            return 'esim'
-
-    return None
-
-
-def _get_product_sim_type(name):
-    """
-    определяет тип SIM в названии товара из прайса
-    '17 Pro Max 256 Silver (Sim eSim)' → 'sim_esim'
-    '17 Pro Max 256 Orange (eSim)' → 'esim'
-    """
-    name_lower = name.lower()
-
-    # Sim eSim — физ + виртуальная
-    if re.search(r'sim\s+esim|sim\s*\+\s*esim', name_lower):
-        return 'sim_esim'
-
-    # Sim Sim — две физические
-    if re.search(r'sim\s+sim|sim\s*\+\s*sim', name_lower):
-        return 'sim_sim'
-
-    # eSim — только виртуальные
-    if 'esim' in name_lower:
-        return 'esim'
-
-    # Sim — одна физическая (без eSim)
-    if 'sim' in name_lower:
-        return 'sim'
-
-    return None
-
-
-def _filter_by_sim(products, sim_type):
-    """фильтрует товары по типу SIM, если тип указан в запросе"""
-    if not sim_type:
-        return products
-
-    return [p for p in products if _get_product_sim_type(p['name']) == sim_type]
-
-
-def _remove_sim_words(text):
-    """
-    убирает слова связанные с SIM из текста запроса
-    чтобы они не мешали поиску по ключевым словам
-    ВАЖНО: сначала убираем составные (sim-esim), потом одиночные
-    """
-    # 1. сначала убираем составные паттерны (sim-esim, сим-сим и тд)
-    compound_patterns = [
-        r'sim[\s\-\+]*e\s*sim',   # sim-esim, sim+esim, sim esim
-        r'сим[\s\-\+]*е\s*сим',   # сим-есим
-        r'sim[\s\-\+]*есим',      # sim-есим
-        r'есим[\s\-\+]*есим',     # есим-есим
-        r'esim[\s\-\+]*esim',     # esim-esim
-        r'сим[\s\-\+]*сим',       # сим-сим
-        r'sim[\s\-\+]*sim',       # sim-sim, sim+sim
-        r'dual\s*esim',           # dual esim
-        r'dual\s*есим',           # dual есим
-        # числовые SIM-паттерны (1физ, 2сим, 1sim и тд) — убираем целиком
-        r'\b[12]\s*физ\w*',        # 1физ, 2физ, 1 физ сим
-        r'\b[12]\s*сим\w*',        # 1сим, 2сим
-        r'\b[12]\s*sim\w*',        # 1sim, 2sim
-        r'\b[12]\s*e\s*sim\w*',    # 1esim, 2esim, 1 e sim
-        r'\b[12]\s*есим\w*',       # 1есим, 2есим
-        r'\b[12]\s*вирт\w*',       # 1вирт, 2вирт
-        r'\b[12]\s*nano\w*',       # 1nano, 2nano
-    ]
-    for pattern in compound_patterns:
-        text = re.sub(pattern, '', text)
-
-    # 2. потом убираем одиночные SIM-паттерны
-    all_patterns = (
-        ESIM_PATTERNS + SIM_SIM_PATTERNS +
-        SIM_ESIM_PATTERNS + ESIM_SINGLE_PATTERNS
+    # Шаг 2: NUM [Pro] [Max] STORAGE COLOR
+    match = re.match(
+        r'^(\d+\w*)\s*(Pro\s*Max|Pro)?\s*(\d+(?:tb)?)\s+(.+)$',
+        name, re.IGNORECASE
     )
-    for pattern in all_patterns:
-        text = re.sub(pattern, '', text)
+    if not match:
+        return None
 
-    # убираем количество со знаком минус (-3, -5) ДО очистки дефисов
-    text = re.sub(r'-\s*\d+(?!\d)', '', text)
+    num = match.group(1).lower()
+    series_raw = (match.group(2) or '').lower().replace(' ', '')
+    storage = match.group(3).lower()
+    color = match.group(4).strip().lower()
 
-    # чистим лишние дефисы, плюсы и пробелы
-    text = re.sub(r'(?<!\w)[\-\+]|[\-\+](?!\w)', ' ', text)  # одинокие дефисы/плюсы
-    text = re.sub(r'\s+', ' ', text).strip()
-    return text
+    if 'promax' in series_raw:
+        series = 'pro_max'
+    elif 'pro' in series_raw:
+        series = 'pro'
+    else:
+        series = 'base'
+
+    return {
+        'num': num,
+        'series': series,
+        'storage': storage,
+        'color': color,
+        'sim': sim,
+    }
 
 
-def normalize_query(text):
+def _parse_iphone_query_model(model):
     """
-    нормализует запрос юзера:
-    - переводит в нижний регистр
-    - заменяет русские слова на английские
-    - убирает мусорные слова и символы
+    Парсит модель iPhone из AI-ответа.
+    '17 Pro'     → ('17', 'pro')
+    '16e'        → ('16e', 'base')
+    '17 Pro Max' → ('17', 'pro_max')
     """
-    text = text.lower().strip()
+    m = model.lower().strip()
+    if 'pro max' in m:
+        series = 'pro_max'
+    elif 'pro' in m:
+        series = 'pro'
+    else:
+        series = 'base'
 
-    # убираем количество спецификаторы ДО очистки юникода (чтобы поймать символы вроде ⠀)
-    text = re.sub(r'\b\d+\s*(?:шт\w*|pcs|штук\w*|\u2800+)(?:\s|$)', ' ', text, flags=re.IGNORECASE)
-    text = re.sub(r'[\-]\s*\d+\b', '', text)     # -3, -5
-
-    # убираем слеш перед числами (например 17 /256 -> 17 256)
-    text = re.sub(r'/(?=\d+)', ' ', text)
-
-    # убираем невидимые юникод-символы (braille blanks и тп из ботов)
-    text = re.sub(r'[^\x00-\x7FА-Яа-яёЁ0-9]', ' ', text)
-
-    # убираем эмодзи, знаки вопроса, восклицательные
-    text = re.sub(r'[❗‼⁉❓?!]+', '', text)
-
-    # убираем GB/ГБ после чисел (256GB → 256)
-    text = re.sub(r'(\d+)\s*(?:gb|гб)', r'\1', text, flags=re.IGNORECASE)
-
-    # нормализуем ТБ/TB (1тб → 1tb, 2тб → 2tb)
-    text = re.sub(r'(\d+)\s*(?:тб|tb)', r'\1tb', text, flags=re.IGNORECASE)
-    text = re.sub(r'[*×]\s*\d+\b', '', text)     # *2, ×5
-    text = re.sub(r'\b\d+\s*[*×]\b', '', text)   # 2*, 3×
-
-    # убираем мусорные слова (apple, iphone, gb и тд)
-    for word in STOP_WORDS:
-        text = re.sub(rf'\b{word}\b', '', text, flags=re.IGNORECASE)
-
-    # собираем все алиасы: захардкоженные + из Телеграма
-    # телеграмные переопределяют захардкоженные
-    all_aliases = {**ALIASES, **aliases_module.get_aliases()}
-
-    # собираем многословные: захардкоженные + из однословных алиасов
-    multi_word = {**MULTI_WORD_ALIASES}
-    for k, v in all_aliases.items():
-        if ' ' in k:
-            multi_word[k] = v
-    # сортируем по длине — длинные первыми
-    for key in sorted(multi_word.keys(), key=len, reverse=True):
-        text = text.replace(key, multi_word[key])
-
-    # потом заменяем однословные алиасы
-    words = text.split()
-    normalized_words = []
-    for word in words:
-        word = word.strip('.,;:()[]{}')
-        if word in all_aliases:
-            normalized_words.append(all_aliases[word])
-        elif word:
-            normalized_words.append(word)
-
-    return ' '.join(normalized_words)
+    num_match = re.match(r'^(\d+\w*)', m)
+    num = num_match.group(1) if num_match else m
+    return (num, series)
 
 
-def _extract_numbers(text):
-    """извлекает все числа из текста"""
-    return set(re.findall(r'\b\d+\b', text))
-
-def _get_series(text):
-    """определяет серию: pro_max, pro, plus, base"""
-    words = text.split()
-    if 'pro' in words and 'max' in words: return 'pro_max'
-    if 'max' in words: return 'pro_max'  # "17 max 256" = "17 pro max 256"
-    if 'pro' in words: return 'pro'
-    if 'plus' in words: return 'plus'
-    return 'base'
-
-def find_products(query, sim_override=None):
+def _parse_samsung_product(name):
     """
-    Умный структурный поиск:
-    вместо точного совпадения всех слов, оцениваем товары на предмет ПРОТИВОРЕЧИЙ
-    с запросом по ключевым характеристикам (модель, память, серия).
+    Парсит название Samsung из прайса.
+    'A36 8/256 Lime'          → {model:'a36', sub:None, memory:'8/256', color:'lime'}
+    'A26 5G 6/128 Black'      → {model:'a26', sub:'5g', memory:'6/128', color:'black'}
+    'S25 Ultra 12/512 Black'  → {model:'s25', sub:'ultra', memory:'12/512', color:'black'}
+    'S25+ 12/256 Blue'        → {model:'s25+', sub:None, memory:'12/256', color:'blue'}
     """
+    match = re.match(
+        r'^([AS]\d+\+?)\s*(5G|Ultra)?\s*(\d+/\d+)\s+(.+)$',
+        name, re.IGNORECASE
+    )
+    if not match:
+        return None
+    return {
+        'model': match.group(1).lower(),
+        'sub': (match.group(2) or '').lower() or None,
+        'memory': match.group(3),
+        'color': match.group(4).strip().lower(),
+    }
+
+
+def _parse_redmi_product(name):
+    """
+    Парсит название Redmi из прайса.
+    'Redmi 15 6/128GB Midnight Black' → {model:'redmi 15', memory:'6/128', color:'midnight black'}
+    """
+    match = re.match(
+        r'^(Redmi\s+\S+)\s+(\d+/\d+)(?:GB)?\s+(.+)$',
+        name, re.IGNORECASE
+    )
+    if not match:
+        return None
+    return {
+        'model': match.group(1).lower(),
+        'memory': match.group(2),
+        'color': match.group(3).strip().lower(),
+    }
+
+
+def _search_iphone(item):
+    """Поиск iPhone по нормализованным полям из AI."""
     products = price_parser.get_all_products()
 
-    if not products:
-        return {'exact': [], 'similar': []}
-
-    # ШАГ 0: Fast Path — проверяем примеры заказчика
-    # если запрос совпал с примером — сразу отдаём товар
-    example_query = ' '.join(query.lower().split())
-    example_product_name = examples_module.find_by_example(example_query)
-    if example_product_name:
-        # ищем этот товар в прайсе чтобы вернуть с ценой
-        for p in products:
-            if p['name'].lower() == example_product_name.lower():
-                logger.info(f'Поиск: "{query}" → [Пример] → {p["name"]} — {p["price"]}')
-                return {'exact': [p], 'similar': []}
-
-    # ШАГ 0.5: Fast Path — уникальные товары (адаптеры, конкретные дайсоны)
-    query_lower = query.lower()
-    for kw, prod_name in SPECIAL_KEYWORDS.items():
-        # ищем как отдельное слово, чтобы "20w" не совпало внутри "120w"
-        if re.search(r'\b' + re.escape(kw) + r'\b', query_lower) or kw in query_lower and ' ' in kw:
-            # ищем этот товар в прайсе
-            for p in products:
-                if prod_name.lower() in p['name'].lower():
-                    logger.info(f'Поиск: "{query}" → [Уникальный товар] → {p["name"]}')
-                    return {'exact': [p], 'similar': []}
-
-    # определяем SIM
-    sim_type = sim_override or _detect_sim_type(query)
-
-    # нормализуем запрос (чистим мусор, переводим алиасы)
-    # ВАЖНО: передаем в _remove_sim_words текст в нижнем регистре
-    clean_query = _remove_sim_words(query.lower())
-    normalized = normalize_query(clean_query)
-
-    # чистим мусор: оставляем только слова из прайса + цифры
-    # это убирает "маркетплейсов", "оригинал", "срочно" и тд
-    vocab = set()
-    for p in products:
-        name = re.sub(r'\([^)]*\)', '', p['name']).lower()
-        for w in name.split():
-            w = w.strip('.,;:()[]{}/-')
-            if w:
-                vocab.add(w)
-
-    query_words = [w for w in normalized.split() if w in vocab or w.isdigit()]
-
-    if not query_words:
-        return {'exact': [], 'similar': []}
-
-    # слишком общий запрос (например просто "blue")
-    too_generic = len(query_words) < 2
-
-    # извлекаем характеристики из запроса
-    query_nums = _extract_numbers(normalized)
-    query_series = _get_series(normalized)
-
-    logger.info(f'Поиск: "{query}" → "{normalized}" (SIM: {sim_type or "любой"})')
+    q_num, q_series = _parse_iphone_query_model(item['model'])
+    q_storage = item.get('memory')
+    q_color = _normalize_iphone_color(item.get('color'))
+    q_sim = item.get('sim')
 
     exact = []
     similar = []
 
     for product in products:
-        # нормализуем имя товара (для алиасов цветов и тд)
-        # убираем SIM из имени чтобы не мешало
-        name_no_sim = re.sub(r'\([^)]*\)', '', product['name']).lower()
-        norm_product = normalize_query(name_no_sim)
-        prod_words = norm_product.split()
+        if _detect_product_category(product['name']) != 'iphone':
+            continue
 
-        prod_nums = _extract_numbers(norm_product)
-        prod_series = _get_series(norm_product)
+        parsed = _parse_iphone_product(product['name'])
+        if not parsed:
+            continue
 
-        # 1. Проверка на противоречия (Штрафы)
-        is_exact = True
+        # ФИЛЬТР 1: Номер модели (точное совпадение: 17==17, 16e==16e)
+        if q_num != parsed['num']:
+            continue
 
-        # А. Противоречие по числам (модель, память)
-        # Если юзер указал число (например 512, 17, 13), оно ДОЛЖНО быть в товаре
-        for num in query_nums:
-            if num not in prod_nums:
-                is_exact = False
-                break
+        # ФИЛЬТР 2: Серия (Pro / Pro Max / base — строго)
+        if q_series != parsed['series']:
+            continue
 
-        # Б. Противоречие по серии (Pro vs Base vs Pro Max)
-        # Если юзер указал конкретную серию, товар должен соответствовать
-        # Если юзер НЕ указал серию (base), а товар это Pro — это противоречие
-        if query_series != prod_series:
-            is_exact = False
+        # ФИЛЬТР 3: Память (если указана — точное совпадение)
+        if q_storage is not None:
+            if q_storage.lower() != parsed['storage']:
+                similar.append(product)
+                continue
 
-        # В. Противоречие по словам (цвета, бренды и прочее)
-        # Все НЕчисловые слова из запроса должны быть в названии
-        for word in query_words:
-            if not word.isdigit() and word not in prod_words:
-                is_exact = False
-                break
+        # ФИЛЬТР 4: Цвет (через IPHONE_COLOR_MAP)
+        if q_color is not None:
+            if q_color != parsed['color']:
+                similar.append(product)
+                continue
 
-        if is_exact and not too_generic:
+        # ФИЛЬТР 5: SIM (если указан — точное совпадение)
+        if q_sim is not None:
+            if q_sim != parsed['sim']:
+                continue
+
+        exact.append(product)
+
+    return {'exact': exact, 'similar': similar[:5]}
+
+
+def _search_samsung(item):
+    """Поиск Samsung A/S-серии по нормализованным полям."""
+    products = price_parser.get_all_products()
+
+    q_model_raw = item['model'].lower()
+    # Убираем префиксы Galaxy/Samsung если есть
+    q_model_raw = re.sub(r'^(galaxy|samsung)\s*', '', q_model_raw).strip()
+    # Извлекаем базовую модель (A36, S25, S25+) и суффикс (5G, Ultra)
+    q_base_match = re.match(r'^([as]\d+\+?)', q_model_raw)
+    q_base = q_base_match.group(1) if q_base_match else q_model_raw
+    q_sub = None
+    if '5g' in q_model_raw:    q_sub = '5g'
+    if 'ultra' in q_model_raw: q_sub = 'ultra'
+    q_memory = item.get('memory')
+    q_color = item.get('color', '').lower() if item.get('color') else None
+
+    exact = []
+    similar = []
+
+    for product in products:
+        if _detect_product_category(product['name']) != 'samsung':
+            continue
+
+        parsed = _parse_samsung_product(product['name'])
+        if not parsed:
+            continue
+
+        # ФИЛЬТР 1: Базовая модель (a36 == a36)
+        if q_base != parsed['model']:
+            continue
+
+        # ФИЛЬТР 1.5: Суффикс 5G (если указан в запросе)
+        if q_sub is not None and q_sub != parsed.get('sub'):
+            continue
+
+        # ФИЛЬТР 2: Память
+        # "8/256" == "8/256" — точное совпадение
+        # "128" → ищем в storage части: "4/128" → storage=128 → совпадение
+        if q_memory is not None:
+            p_mem = parsed['memory']  # напр. "4/128"
+            if q_memory != p_mem:
+                # клиент указал только storage без RAM: "128" vs "4/128"
+                storage_part = p_mem.split('/')[-1] if '/' in p_mem else p_mem
+                if q_memory != storage_part:
+                    similar.append(product)
+                    continue
+
+        # ФИЛЬТР 3: Цвет
+        if q_color is not None:
+            if q_color != parsed['color']:
+                similar.append(product)
+                continue
+
+        exact.append(product)
+
+    return {'exact': exact, 'similar': similar[:5]}
+
+
+def _search_redmi(item):
+    """Поиск Redmi/Xiaomi по нормализованным полям."""
+    products = price_parser.get_all_products()
+
+    q_model = item['model'].lower()
+    q_memory = item.get('memory')
+    q_color = item.get('color', '').lower() if item.get('color') else None
+
+    exact = []
+    similar = []
+
+    for product in products:
+        if _detect_product_category(product['name']) != 'redmi':
+            continue
+
+        parsed = _parse_redmi_product(product['name'])
+        if not parsed:
+            continue
+
+        # ФИЛЬТР 1: Модель (redmi 15 == redmi 15)
+        if q_model != parsed['model']:
+            continue
+
+        # ФИЛЬТР 2: Память (аналогично Samsung — storage-only: "128" → "6/128")
+        if q_memory is not None:
+            p_mem = parsed['memory']
+            if q_memory != p_mem:
+                storage_part = p_mem.split('/')[-1] if '/' in p_mem else p_mem
+                if q_memory != storage_part:
+                    similar.append(product)
+                    continue
+
+        # ФИЛЬТР 3: Цвет (частичное: 'black' найдёт 'midnight black')
+        if q_color is not None:
+            p_color = parsed['color']
+            if q_color != p_color and not p_color.endswith(q_color):
+                similar.append(product)
+                continue
+
+        exact.append(product)
+
+    return {'exact': exact, 'similar': similar[:5]}
+
+
+def _search_dyson(item):
+    """Поиск Dyson — fuzzy matching по модели + цвету."""
+    products = price_parser.get_all_products()
+
+    q_full = item['model']
+    if item.get('color'):
+        q_full += ' ' + item['color']
+    q_lower = q_full.lower()
+
+    exact = []
+    similar = []
+
+    for product in products:
+        if _detect_product_category(product['name']) != 'dyson':
+            continue
+
+        p_lower = product['name'].lower()
+        score = fuzz.token_set_ratio(q_lower, p_lower)
+
+        if score >= 85:
             exact.append(product)
-        else:
-            # если точного совпадения нет — считаем fuzzy score
-            score = fuzz.token_set_ratio(normalized, norm_product)
-            if score >= 55:
-                similar.append({**product, 'score': score})
+        elif score >= 60:
+            similar.append({**product, '_score': score})
 
-    # фильтруем по SIM строго — если указан тип SIM, показываем только его
-    if sim_type:
-        exact = _filter_by_sim(exact, sim_type)
-        similar = _filter_by_sim(similar, sim_type)
+    similar.sort(key=lambda x: x.get('_score', 0), reverse=True)
+    return {'exact': exact, 'similar': similar[:5]}
 
-    similar.sort(key=lambda x: x['score'], reverse=True)
-    similar = similar[:5]
 
-    logger.info(f'  Точных: {len(exact)}, Похожих: {len(similar)}')
+def _search_adapter(item):
+    """Поиск адаптеров — keyword matching."""
+    products = price_parser.get_all_products()
 
-    return {'exact': exact, 'similar': similar}
+    exact = []
+    for product in products:
+        if _detect_product_category(product['name']) != 'adapter':
+            continue
+        exact.append(product)
+
+    return {'exact': exact, 'similar': []}
+
+
+def _search_generic(item):
+    """Fallback: fuzzy поиск для неизвестных категорий (MacBook и др.)."""
+    products = price_parser.get_all_products()
+
+    q = item.get('model', '')
+    if item.get('memory'):
+        q += ' ' + item['memory']
+    if item.get('color'):
+        q += ' ' + item['color']
+    q_lower = q.lower()
+
+    exact = []
+    similar = []
+
+    for product in products:
+        score = fuzz.token_set_ratio(q_lower, product['name'].lower())
+        if score >= 85:
+            exact.append(product)
+        elif score >= 60:
+            similar.append({**product, '_score': score})
+
+    similar.sort(key=lambda x: x.get('_score', 0), reverse=True)
+    return {'exact': exact, 'similar': similar[:5]}
+
+
+def find_by_normalized(item):
+    """
+    Главная точка входа нового поиска.
+    Принимает нормализованный JSON от AI, возвращает {exact: [...], similar: [...]}.
+    """
+    model = item.get('model', '')
+    category = _detect_category(model)
+
+    logger.info(
+        f'  [Поиск] AI вернул: model="{model}" mem={item.get("memory")} '
+        f'color={item.get("color")} sim={item.get("sim")} → категория: {category}'
+    )
+
+    if category == 'iphone':
+        result = _search_iphone(item)
+    elif category == 'samsung':
+        result = _search_samsung(item)
+    elif category == 'redmi':
+        result = _search_redmi(item)
+    elif category == 'dyson':
+        result = _search_dyson(item)
+    elif category == 'adapter':
+        result = _search_adapter(item)
+    else:
+        result = _search_generic(item)
+
+    # === ПОДРОБНЫЕ ЛОГИ (убрать перед деплоем) ===
+    if result['exact']:
+        logger.info(f'  [Поиск] ✅ Найдено {len(result["exact"])} товар(ов):')
+        for p in result['exact']:
+            logger.info(f'    → {p["name"]} — {p["price"]}')
+    elif result['similar']:
+        logger.info(f'  [Поиск] ⚠️ Точных нет, похожих: {len(result["similar"])}')
+        for p in result['similar']:
+            logger.info(f'    ~ {p["name"]} — {p["price"]}')
+    else:
+        logger.info(f'  [Поиск] ❌ Ничего не найдено')
+    # === КОНЕЦ ЛОГОВ ===
+
+    return result
