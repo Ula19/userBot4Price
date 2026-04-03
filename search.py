@@ -224,13 +224,13 @@ def _search_iphone(item):
         # ФИЛЬТР 3: Память (если указана — точное совпадение)
         if q_storage is not None:
             if q_storage.lower() != parsed['storage']:
-                similar.append(product)
+                similar.append({**product, '_reason': f'память: просили {q_storage}, есть {parsed["storage"]}'})
                 continue
 
         # ФИЛЬТР 4: Цвет (через IPHONE_COLOR_MAP)
         if q_color is not None:
             if q_color != parsed['color']:
-                similar.append(product)
+                similar.append({**product, '_reason': f'цвет: просили {q_color}, есть {parsed["color"]}'})
                 continue
 
         # ФИЛЬТР 5: SIM (если указан — точное совпадение)
@@ -279,21 +279,18 @@ def _search_samsung(item):
             continue
 
         # ФИЛЬТР 2: Память
-        # "8/256" == "8/256" — точное совпадение
-        # "128" → ищем в storage части: "4/128" → storage=128 → совпадение
         if q_memory is not None:
-            p_mem = parsed['memory']  # напр. "4/128"
+            p_mem = parsed['memory']
             if q_memory != p_mem:
-                # клиент указал только storage без RAM: "128" vs "4/128"
                 storage_part = p_mem.split('/')[-1] if '/' in p_mem else p_mem
                 if q_memory != storage_part:
-                    similar.append(product)
+                    similar.append({**product, '_reason': f'память: просили {q_memory}, есть {p_mem}'})
                     continue
 
         # ФИЛЬТР 3: Цвет
         if q_color is not None:
             if q_color != parsed['color']:
-                similar.append(product)
+                similar.append({**product, '_reason': f'цвет: просили {q_color}, есть {parsed["color"]}'})
                 continue
 
         exact.append(product)
@@ -324,20 +321,20 @@ def _search_redmi(item):
         if q_model != parsed['model']:
             continue
 
-        # ФИЛЬТР 2: Память (аналогично Samsung — storage-only: "128" → "6/128")
+        # ФИЛЬТР 2: Память
         if q_memory is not None:
             p_mem = parsed['memory']
             if q_memory != p_mem:
                 storage_part = p_mem.split('/')[-1] if '/' in p_mem else p_mem
                 if q_memory != storage_part:
-                    similar.append(product)
+                    similar.append({**product, '_reason': f'память: просили {q_memory}, есть {p_mem}'})
                     continue
 
-        # ФИЛЬТР 3: Цвет (частичное: 'black' найдёт 'midnight black')
+        # ФИЛЬТР 3: Цвет
         if q_color is not None:
             p_color = parsed['color']
             if q_color != p_color and not p_color.endswith(q_color):
-                similar.append(product)
+                similar.append({**product, '_reason': f'цвет: просили {q_color}, есть {p_color}'})
                 continue
 
         exact.append(product)

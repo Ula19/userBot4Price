@@ -272,7 +272,9 @@ def register_handlers(client, source_bot, owner_username=None):
                     all_found.extend(result['exact'])
                 elif result['similar']:
                     notify_queries.append({
-                        'query': ai_parser.build_search_query(item),
+                        'raw': full_query,
+                        'ai': ai_parser.build_search_query(item),
+                        'item': item,
                         'similar': result['similar']
                     })
         else:
@@ -368,13 +370,16 @@ def register_handlers(client, source_bot, owner_username=None):
 
         # уведомляем заказчика о запросах с похожими (но не точными)
         if notify_queries and owner_username:
-            notify_lines = ['🔔 Не удалось точно найти:']
-            notify_lines.append(f'Юзер: @{username or "неизвестен"}')
-            for item in notify_queries:
-                notify_lines.append(f'\n❌ Запрос: "{item["query"]}"')
-                notify_lines.append('Похожие:')
-                for p in item['similar'][:3]:
-                    notify_lines.append(f'  • {p["name"]} — {p["price"]}')
+            notify_lines = []
+            for entry in notify_queries:
+                notify_lines.append('🔍 Не смогли найти точно:')
+                notify_lines.append(f'👤 Юзер: @{username or "неизвестен"}')
+                notify_lines.append(f'📝 Написал: "{entry["raw"]}"')
+                notify_lines.append(f'🤖 AI понял: {entry["ai"]}')
+                notify_lines.append('⚠️ Похожие в прайсе (но не совпали):')
+                for p in entry['similar'][:3]:
+                    reason = p.get('_reason', '?')
+                    notify_lines.append(f'  • {p["name"]} — {p["price"]}  [{reason}]')
 
             try:
                 await client.send_message(
