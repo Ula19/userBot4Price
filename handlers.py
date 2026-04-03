@@ -358,14 +358,6 @@ def register_handlers(client, source_bot, owner_username=None):
 
                 if is_new_user:
                     logger.info(f'  Ответ отправлен @{username} (НОВЫЙ юзер)')
-                    if owner_username:
-                        try:
-                            await client.send_message(
-                                owner_username,
-                                f'⚠️ Первое сообщение для @{username} — Telegram может удалить его как спам.'
-                            )
-                        except Exception:
-                            pass
                 else:
                     logger.info(f'  Ответ отправлен @{username} (чат существует)')
 
