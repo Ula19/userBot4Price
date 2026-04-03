@@ -319,19 +319,35 @@ def register_handlers(client, source_bot, owner_username=None):
                     return
 
                 # отправляем по числовому ID (без ResolveUsernameRequest!)
+                # если Telethon не знает access_hash для этого ID — шлём по @username
+                recipient = user_id
+
                 try:
                     typing_time = random.uniform(10, 30)
                     logger.info(f'  Имитирую набор текста для @{username} ({typing_time:.1f}с)...')
-                    async with client.action(user_id, 'typing'):
+                    async with client.action(recipient, 'typing'):
                         await asyncio.sleep(typing_time)
-                    await client.send_message(user_id, response)
+                    await client.send_message(recipient, response)
+                except ValueError as e:
+                    # Telethon не знает access_hash для числового ID → пробуем по @username
+                    if 'input entity' in str(e).lower() or 'peeruser' in str(e).lower():
+                        logger.warning(f'  [ID] Нет access_hash для {user_id}, пробуем @{username}...')
+                        recipient = username
+                        async with client.action(recipient, 'typing'):
+                            await asyncio.sleep(5)
+                        await client.send_message(recipient, response)
+                        # после успешной отправки по username — кэш невалидный, удаляем
+                        logger.info(f'  [ID] Отправлено по @{username}, сбрасываем кэш ID')
+                    else:
+                        raise
                 except errors.FloodWaitError as e:
                     if e.seconds > 300:
                         logger.error(f'  [Анти-спам] Бан {e.seconds}с (~{e.seconds // 3600}ч) для @{username}. Пропускаем.')
                         raise
                     logger.warning(f'  [Анти-спам] Телеграм просит подождать {e.seconds}с для @{username}. Жду...')
                     await asyncio.sleep(e.seconds + 2)
-                    await client.send_message(user_id, response)
+                    await client.send_message(recipient, response)
+
 
                 known_users.add(username)
 
