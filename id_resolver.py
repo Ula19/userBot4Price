@@ -13,6 +13,7 @@ import json
 import os
 import asyncio
 import logging
+from datetime import date
 from telethon import errors
 
 logger = logging.getLogger(__name__)
@@ -30,6 +31,10 @@ RESOLVER_BOTS = [
 
 # кэш в памяти
 _cache = None
+
+# счётчик протухших записей за день
+_stale_count_today = 0
+_stale_count_date = date.today()
 
 
 def _load_cache():
@@ -66,11 +71,25 @@ def _save_cache():
 
 def invalidate_cache(username):
     """удаляет стухшую запись из кэша (вызывается при ошибке PeerUser entity)"""
+    global _stale_count_today, _stale_count_date
+
     cache = _load_cache()
     if username in cache:
         old_id = cache.pop(username)
         _save_cache()
-        logger.info(f'  [ID] Кэш очищен: @{username} (был ID {old_id})')
+
+        # сбрасываем счётчик если наступил новый день
+        today = date.today()
+        if today != _stale_count_date:
+            _stale_count_today = 0
+            _stale_count_date = today
+
+        _stale_count_today += 1
+
+        logger.warning(
+            f'  [ID] ⚠️ Стухший кэш: @{username} (был ID {old_id}) — '
+            f'протухших за сегодня: {_stale_count_today}'
+        )
 
 
 def _parse_id_from_response(text):
