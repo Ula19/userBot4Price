@@ -329,15 +329,20 @@ def register_handlers(client, source_bot, owner_username=None):
                         await asyncio.sleep(typing_time)
                     await client.send_message(recipient, response)
                 except ValueError as e:
-                    # Telethon не знает access_hash для числового ID → пробуем по @username
+                    # Стухший кэш: ID сохранён, но текущая сессия не знает access_hash
+                    # Это бывает после смены сессии или если юзер давно в кэше
                     if 'input entity' in str(e).lower() or 'peeruser' in str(e).lower():
-                        logger.warning(f'  [ID] Нет access_hash для {user_id}, пробуем @{username}...')
+                        logger.warning(
+                            f'  [ID] Стухший кэш: {user_id} не работает для @{username}. '
+                            f'Удаляем кэш и шлём по @username...'
+                        )
+                        # удаляем невалидный кэш — следующий раз заново спросим через бота
+                        id_resolver.invalidate_cache(username)
+
                         recipient = username
                         async with client.action(recipient, 'typing'):
                             await asyncio.sleep(5)
                         await client.send_message(recipient, response)
-                        # после успешной отправки по username — кэш невалидный, удаляем
-                        logger.info(f'  [ID] Отправлено по @{username}, сбрасываем кэш ID')
                     else:
                         raise
                 except errors.FloodWaitError as e:

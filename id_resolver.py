@@ -64,6 +64,15 @@ def _save_cache():
         logger.error(f'  [ID] Ошибка записи кэша: {e}')
 
 
+def invalidate_cache(username):
+    """удаляет стухшую запись из кэша (вызывается при ошибке PeerUser entity)"""
+    cache = _load_cache()
+    if username in cache:
+        old_id = cache.pop(username)
+        _save_cache()
+        logger.info(f'  [ID] Кэш очищен: @{username} (был ID {old_id})')
+
+
 def _parse_id_from_response(text):
     """
     парсит числовой ID из ответа бота
