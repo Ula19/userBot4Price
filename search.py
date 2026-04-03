@@ -236,6 +236,7 @@ def _search_iphone(item):
         # ФИЛЬТР 5: SIM (если указан — точное совпадение)
         if q_sim is not None:
             if q_sim != parsed['sim']:
+                similar.append({**product, '_reason': f'SIM: просили {q_sim}, есть {parsed.get("sim", "?")}'})
                 continue
 
         exact.append(product)
