@@ -137,7 +137,7 @@ async def normalize_queries(text: str):
         logger.info(f'  [ИИ] >>> Нормализуем запрос: "{text[:80]}"')
 
         response = _client.chat.completions.create(
-            model='gpt-4o-mini',
+            model='gpt-4.1-mini',
             messages=[
                 {'role': 'system', 'content': SYSTEM_PROMPT},
                 {'role': 'user', 'content': user_message},
