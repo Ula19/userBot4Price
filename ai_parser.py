@@ -12,9 +12,17 @@ from openai import OpenAI
 
 logger = logging.getLogger(__name__)
 
-# инициализация клиента OpenAI
-_api_key = os.getenv('OPENAI_API_KEY')
-_client = OpenAI(api_key=_api_key) if _api_key else None
+# ленивая инициализация — чтобы load_dotenv() успел отработать до первого вызова
+_client = None
+
+
+def _get_client():
+    global _client
+    if _client is None:
+        api_key = os.getenv('OPENAI_API_KEY')
+        if api_key:
+            _client = OpenAI(api_key=api_key)
+    return _client
 
 SYSTEM_PROMPT = """Ты — парсер запросов для магазина электроники.
 Твоя единственная задача: извлечь характеристики товара из текста клиента.
@@ -127,7 +135,7 @@ async def normalize_queries(text: str):
         list[dict] — [{model, memory, color, sim}, ...] — нормализованные товары
         None — если ИИ недоступен (для fallback на прямой поиск)
     """
-    if not _client:
+    if not _get_client():
         logger.warning('OpenAI API ключ не настроен, используем прямой поиск')
         return None
 
@@ -136,7 +144,7 @@ async def normalize_queries(text: str):
     try:
         logger.info(f'  [ИИ] >>> Нормализуем запрос: "{text[:80]}"')
 
-        response = _client.chat.completions.create(
+        response = _get_client().chat.completions.create(
             model='gpt-4.1-mini',
             messages=[
                 {'role': 'system', 'content': SYSTEM_PROMPT},
