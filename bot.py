@@ -1,5 +1,7 @@
 import os
 import logging
+import socks
+from urllib.parse import urlparse
 from dotenv import load_dotenv
 from telethon import TelegramClient, events
 import price_parser
@@ -27,13 +29,29 @@ PHONE = os.getenv('PHONE')
 PRICE_CHAT_ID = os.getenv('PRICE_CHAT_ID')
 SOURCE_BOT = os.getenv('SOURCE_BOT')
 OWNER_USERNAME = os.getenv('OWNER_USERNAME')
+PROXY_URL = os.getenv('PROXY_URL')
 
 # путь к сессии — в Docker монтируется ./data, локально в текущей папке
 import os as _os
 SESSION_PATH = 'data/userbot_session' if _os.path.isdir('data') else 'userbot_session'
 
+# парсим прокси из .env если задан
+def _parse_proxy(proxy_url: str | None):
+    """Преобразует 'socks5://host:port' или 'socks5://user:pass@host:port' в tuple для Telethon."""
+    if not proxy_url:
+        return None
+    p = urlparse(proxy_url)
+    proxy_type = socks.SOCKS5 if p.scheme == 'socks5' else socks.SOCKS4
+    if p.username and p.password:
+        return (proxy_type, p.hostname, p.port, True, p.username, p.password)
+    return (proxy_type, p.hostname, p.port)
+
+_proxy = _parse_proxy(PROXY_URL)
+if _proxy:
+    logger.info(f'Прокси: {PROXY_URL.split("@")[-1]}')
+
 # создаем клиент телеграма (userbot)
-client = TelegramClient(SESSION_PATH, API_ID, API_HASH)
+client = TelegramClient(SESSION_PATH, API_ID, API_HASH, proxy=_proxy)
 
 
 # при любом изменении в чате прайса - перезагружаем весь прайс
