@@ -454,9 +454,17 @@ def find_by_normalized(item):
 # ПОИСК ПО АРТИКУЛУ APPLE (MC6T4, MW123, MYND3 и т.д.)
 # ═══════════════════════════════════════════════════════════════════
 
-# Артикулы Apple: начинаются с M, длина 5-7 символов, буквы+цифры
-# Примеры: MC6T4, MW123, MYND3, MXYZ12
-_ARTICLE_PATTERN = re.compile(r'\bM[A-Z0-9]{4,6}\b', re.IGNORECASE)
+# Артикулы Apple: начинаются с M, длина 5-6 символов, обязательно буквы И цифры
+# Примеры: MC6T4, MW123, MW1236, MTL83
+_ARTICLE_PATTERN = re.compile(r'\bM[A-Z0-9]{4,5}\b', re.IGNORECASE)
+
+
+def _is_valid_article(text: str) -> bool:
+    """Валидный артикул: после M есть и буквы и цифры (отсекает MACBOOK, M1234)."""
+    rest = text[1:]
+    has_digit = any(c.isdigit() for c in rest)
+    has_letter = any(c.isalpha() for c in rest)
+    return has_digit and has_letter
 
 
 def find_by_article(queries):
@@ -477,7 +485,7 @@ def find_by_article(queries):
 
     for query in queries:
         match = _ARTICLE_PATTERN.search(query)
-        if not match:
+        if not match or not _is_valid_article(match.group(0).upper()):
             remaining.append(query)
             continue
 
