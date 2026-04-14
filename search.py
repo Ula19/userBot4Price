@@ -448,3 +448,53 @@ def find_by_normalized(item):
     # === КОНЕЦ ЛОГОВ ===
 
     return result
+
+
+# ═══════════════════════════════════════════════════════════════════
+# ПОИСК ПО АРТИКУЛУ APPLE (MC6T4, MW123, MYND3 и т.д.)
+# ═══════════════════════════════════════════════════════════════════
+
+# Артикулы Apple: начинаются с M, длина 5-7 символов, буквы+цифры
+# Примеры: MC6T4, MW123, MYND3, MXYZ12
+_ARTICLE_PATTERN = re.compile(r'\bM[A-Z0-9]{4,6}\b', re.IGNORECASE)
+
+
+def find_by_article(queries):
+    """
+    Ищет товары по артикулу Apple в сыром запросе юзера.
+
+    Args:
+        queries: list[str] — сырые запросы юзера (уже разбитые по запятым)
+
+    Returns:
+        tuple (found, remaining):
+            found — list[dict] товаров найденных по артикулу
+            remaining — list[str] запросов БЕЗ тех что сматчились по артикулу
+    """
+    found = []
+    remaining = []
+    products = price_parser.products
+
+    for query in queries:
+        match = _ARTICLE_PATTERN.search(query)
+        if not match:
+            remaining.append(query)
+            continue
+
+        article = match.group(0).upper()
+        # ищем товар в прайсе у которого этот артикул есть в названии
+        matched_product = None
+        for product in products:
+            if article in product['name'].upper():
+                matched_product = product
+                break
+
+        if matched_product:
+            logger.info(f'  [Артикул] ✅ "{query}" → артикул {article} → {matched_product["name"]}')
+            found.append(matched_product)
+        else:
+            # артикул похожий, но в прайсе нет такого товара — отправим в AI как обычно
+            logger.info(f'  [Артикул] ⚠️ "{article}" не найден в прайсе, отдаю в AI')
+            remaining.append(query)
+
+    return found, remaining

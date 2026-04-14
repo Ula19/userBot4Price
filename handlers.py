@@ -266,9 +266,19 @@ def register_handlers(client, source_bot, owner_username=None):
         all_found = []
         notify_queries = []
 
-        # ШАГ 1: нормализуем запрос через ИИ
-        full_query = '\n'.join(queries)
-        normalized = await ai_parser.normalize_queries(full_query)
+        # ШАГ 0: поиск по артикулу Apple (MC6T4, MW123 и т.д.) — до AI
+        found_by_article, queries = search.find_by_article(queries)
+        if found_by_article:
+            all_found.extend(found_by_article)
+            logger.info(f'  [Артикул] Найдено по артикулу: {len(found_by_article)}')
+
+        # ШАГ 1: нормализуем оставшиеся запросы через ИИ
+        if not queries:
+            logger.info('  Все запросы обработаны по артикулу, AI пропускаем')
+            normalized = []
+        else:
+            full_query = '\n'.join(queries)
+            normalized = await ai_parser.normalize_queries(full_query)
 
         if normalized is not None:
             # Проверяем флаги стран → SIM-тип (только для iPhone)
