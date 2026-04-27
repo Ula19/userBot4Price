@@ -30,6 +30,7 @@ PRICE_CHAT_ID = os.getenv('PRICE_CHAT_ID')
 SOURCE_BOT = os.getenv('SOURCE_BOT')
 OWNER_USERNAME = os.getenv('OWNER_USERNAME')
 PROXY_URL = os.getenv('PROXY_URL')
+GROUP_CHATS = os.getenv('GROUP_CHATS', '')
 
 # путь к сессии — в Docker монтируется ./data, локально в текущей папке
 import os as _os
@@ -114,6 +115,25 @@ async def main():
     logger.info(f'Слушаю запросы от ID {source_id}')
     if owner_id:
         logger.info(f'Уведомления о ненайденном → ID {owner_id}')
+
+    # режим групп: слушаем указанные в GROUP_CHATS чаты
+    group_entities = []
+    for raw in (item.strip() for item in GROUP_CHATS.split(',')):
+        if not raw:
+            continue
+        try:
+            if raw.lstrip('-').isdigit():
+                entity = await client.get_input_entity(int(raw))
+            else:
+                entity = await client.get_input_entity(raw)
+            group_entities.append(entity)
+            logger.info(f'Группа: {raw} → ок')
+        except Exception as e:
+            logger.error(f'Не удалось найти группу {raw}: {e}')
+
+    if group_entities:
+        handlers.register_group_handlers(client, group_entities, owner_id)
+        logger.info(f'Слушаю {len(group_entities)} групп(ы)')
 
     logger.info('Для остановки нажми Ctrl+C')
 
