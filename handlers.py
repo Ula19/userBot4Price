@@ -16,6 +16,9 @@ logger = logging.getLogger(__name__)
 # анти-спам кулдаун
 user_last_reply = {}
 
+# кулдаун для group-режима (ключ — sender.id)
+group_user_last_reply = {}
+
 # юзеры которым уже писали (для детекции нового чата без API)
 known_users = set()
 
@@ -39,7 +42,7 @@ def _detect_flag_sim(text):
 
 
 # московское время (UTC+3)
-MSK = timezone(timedelta(hours=3))
+MSK = timezone(timedelta(hours=3))  # +3
 
 # рабочие часы (по МСК)
 WORK_START = 10  # 10:00
@@ -216,6 +219,248 @@ def format_response(results):
         return f'{price_text}\n\nИнтересно?'
 
 
+async def _search_products(queries_list, raw_text):
+    """
+    Общее ядро поиска: артикул → AI-нормализация → категорийный поиск → дедуп.
+
+    queries_list — список запросов (для find_by_article, разбитых по запятым/строкам).
+    raw_text — исходный текст целиком (для детекции флага страны → SIM и full_query для AI).
+
+    Возвращает (all_found, notify_queries, ai_ok).
+    ai_ok=False если AI-нормализатор недоступен (None).
+    """
+    all_found = []
+    notify_queries = []
+
+    found_by_article, remaining = search.find_by_article(queries_list)
+    if found_by_article:
+        all_found.extend(found_by_article)
+        logger.info(f'  [Артикул] Найдено по артикулу: {len(found_by_article)}')
+
+    if not remaining:
+        logger.info('  Все запросы обработаны по артикулу, AI пропускаем')
+        normalized = []
+    else:
+        full_query = '\n'.join(remaining)
+        normalized = await ai_parser.normalize_queries(full_query)
+
+    if normalized is None:
+        logger.error('  [AI] OpenAI недоступен!')
+        return _dedup(all_found), notify_queries, False
+
+    flag_sim = _detect_flag_sim(raw_text)
+    if flag_sim:
+        logger.info(f'  [Флаг] Обнаружен флаг → SIM: {flag_sim}')
+
+    for item in normalized:
+        if flag_sim and not item.get('sim'):
+            model = item.get('model', '').lower()
+            if re.match(r'^\d', model):
+                item['sim'] = flag_sim
+                logger.info(f'  [Флаг] Применяем SIM={flag_sim} к {item["model"]}')
+
+        result = search.find_by_normalized(item)
+        if result['exact']:
+            all_found.extend(result['exact'])
+        elif result['similar']:
+            notify_queries.append({
+                'raw': raw_text,
+                'ai': ai_parser.build_search_query(item),
+                'item': item,
+                'similar': result['similar']
+            })
+
+    return _dedup(all_found), notify_queries, True
+
+
+def _dedup(products):
+    seen = set()
+    out = []
+    for p in products:
+        if p['name'] not in seen:
+            seen.add(p['name'])
+            out.append(p)
+    return out
+
+
+async def _notify_owner_similar(client, owner_id, who_label, notify_queries):
+    """Уведомляет владельца о запросах с похожими (но не точными) совпадениями."""
+    if not notify_queries or not owner_id:
+        return
+    lines = []
+    for entry in notify_queries:
+        lines.append('🔍 Не смогли найти точно:')
+        lines.append(f'👤 Юзер: {who_label}')
+        lines.append(f'📝 Написал: "{entry["raw"]}"')
+        lines.append(f'🤖 AI понял: {entry["ai"]}')
+        lines.append('⚠️ Похожие в прайсе (но не совпали):')
+        for p in entry['similar'][:3]:
+            reason = p.get('_reason', '?')
+            lines.append(f'  • {p["name"]} — {p["price"]}  [{reason}]')
+    try:
+        await client.send_message(owner_id, '\n'.join(lines))
+        logger.info(f'  Уведомление → владельцу о {len(notify_queries)} похож.')
+    except Exception as e:
+        logger.error(f'  Не удалось уведомить владельца: {e}')
+
+
+# ═══════════════════════════════════════════════════════════════════
+# GROUP-РЕЖИМ: мониторинг обычных Telegram-групп
+# ═══════════════════════════════════════════════════════════════════
+
+_PRODUCT_KEYWORDS = re.compile(
+    r'(iphone|айфон|samsung|galaxy|dyson|macbook|ipad|airpods|'
+    r'adapter|адаптер|зарядк|наушник|пылесос|фен|стайлер|redmi|xiaomi|pixel|'
+    r'ps\d|playstation|плейстейшен|плойк|пс\d|сони|'
+    r'xbox|иксбокс|nintendo|нинтендо|свитч|консол|приставк)',
+    re.I
+)
+_IPHONE_GEN = re.compile(r'\b(1[4-9])\b')
+_SOFT_MARKERS = re.compile(
+    r'(есть|почём|почем|сколько|куплю|ищу|надо|нужен|нужна|нужно|цена|price)',
+    re.I
+)
+
+
+def _split_for_article(text):
+    """Разбивает сырой текст по переводам строк и запятым для find_by_article."""
+    parts = []
+    for line in (text or '').split('\n'):
+        for p in line.split(','):
+            p = p.strip()
+            if p:
+                parts.append(p)
+    return parts or [text]
+
+
+def _classify_group_message(text):
+    """'yes' — явный запрос, 'no' — точно не запрос, 'maybe' — спорный (отдать в AI)."""
+    t = (text or '').strip()
+    if len(t) < 4 or t.startswith('/'):
+        return 'no'
+
+    # артикул Apple в любой из частей
+    for part in _split_for_article(t):
+        m = search._ARTICLE_PATTERN.search(part)
+        if m and search._is_valid_article(m.group(0).upper()):
+            return 'yes'
+
+    if _PRODUCT_KEYWORDS.search(t) or _IPHONE_GEN.search(t):
+        return 'yes'
+
+    has_digit = any(c.isdigit() for c in t)
+    if has_digit and _SOFT_MARKERS.search(t):
+        return 'maybe'
+
+    return 'no'
+
+
+def register_group_handlers(client, group_chats, owner_id=None):
+    """
+    Регистрирует обработчик сообщений в обычных группах.
+
+    group_chats — список entity/ID/username, который Telethon примет в chats=.
+    owner_id — числовой ID заказчика для уведомлений о похожих.
+    """
+
+    @client.on(events.NewMessage(chats=group_chats, incoming=True))
+    async def on_group_message(event):
+        text = event.raw_text
+        if not text or event.out:
+            return
+
+        if not is_work_time():
+            return
+
+        try:
+            sender = await event.get_sender()
+        except Exception as e:
+            logger.warning(f'  [Группа] get_sender: {e}')
+            return
+        if sender is None or getattr(sender, 'bot', False):
+            return
+
+        sender_id = sender.id
+        username = getattr(sender, 'username', None)
+        who_label = f'@{username}' if username else f'id:{sender_id}'
+
+        verdict = _classify_group_message(text)
+        if verdict == 'no':
+            return
+
+        now = time.time()
+        last = group_user_last_reply.get(sender_id)
+        if last and now - last < 60:
+            logger.warning(f'  [Группа/Анти-спам] {who_label}: прошло {int(now-last)}с из 60с')
+            return
+        group_user_last_reply[sender_id] = now
+
+        logger.info(f'Новый запрос из группы {event.chat_id} от {who_label} (classify={verdict})')
+
+        queries_list = _split_for_article(text)
+        all_found, notify_queries, ai_ok = await _search_products(queries_list, text)
+
+        if not ai_ok and owner_id:
+            try:
+                await client.send_message(
+                    owner_id,
+                    f'🚨 AI-нормализатор недоступен!\n'
+                    f'Запрос от {who_label} в группе {event.chat_id} не обработан.'
+                )
+            except Exception:
+                pass
+
+        if all_found:
+            response = format_response(all_found)
+
+            delay = random.uniform(20, 50)
+            logger.info(f'  Жду {delay:.1f}с перед ответом {who_label}...')
+            await asyncio.sleep(delay)
+
+            sent_to_dm = False
+            try:
+                typing_time = random.uniform(10, 20)
+                logger.info(f'  Имитирую набор текста в ЛС {who_label} ({typing_time:.1f}с)...')
+                async with client.action(sender, 'typing'):
+                    await asyncio.sleep(typing_time)
+                await client.send_message(sender, response)
+                sent_to_dm = True
+                logger.info(f'  Ответ отправлен в ЛС {who_label}')
+            except errors.FloodWaitError as e:
+                if e.seconds > 300:
+                    logger.error(f'  [Флуд] бан {e.seconds}с — пропускаем {who_label}')
+                    return
+                logger.warning(f'  [Флуд] ждём {e.seconds}с для {who_label}')
+                await asyncio.sleep(e.seconds + 2)
+                try:
+                    await client.send_message(sender, response)
+                    sent_to_dm = True
+                except Exception as e2:
+                    logger.warning(f'  [Группа] повтор ЛС не удался: {e2}')
+            except (errors.UserPrivacyRestrictedError, errors.UserIsBlockedError) as e:
+                logger.info(f'  [Группа] ЛС недоступно ({type(e).__name__}), fallback в группу')
+            except Exception as e:
+                logger.warning(f'  [Группа] ЛС не вышло ({type(e).__name__}: {e}), fallback в группу')
+
+            if not sent_to_dm:
+                try:
+                    typing_time = random.uniform(5, 10)
+                    async with client.action(event.chat_id, 'typing'):
+                        await asyncio.sleep(typing_time)
+                    await event.reply(response)
+                    logger.info(f'  Ответ отправлен reply в группу {event.chat_id}')
+                except Exception as e:
+                    logger.error(f'  [Группа] reply не удался: {e}')
+        else:
+            logger.info('  [Группа] ничего не найдено, не отвечаем')
+
+        await _notify_owner_similar(
+            client, owner_id,
+            f'{who_label} (группа {event.chat_id})',
+            notify_queries
+        )
+
+
 def register_handlers(client, source_bot, owner_username=None):
     """
     регистрирует обработчик сообщений от бота-источника
@@ -262,70 +507,18 @@ def register_handlers(client, source_bot, owner_username=None):
         if shared_sim:
             logger.info(f'  Общий SIM: {shared_sim}')
 
-        # === ПОИСК ТОВАРОВ ===
-        all_found = []
-        notify_queries = []
+        all_found, notify_queries, ai_ok = await _search_products(queries, text)
 
-        # ШАГ 0: поиск по артикулу Apple (MC6T4, MW123 и т.д.) — до AI
-        found_by_article, queries = search.find_by_article(queries)
-        if found_by_article:
-            all_found.extend(found_by_article)
-            logger.info(f'  [Артикул] Найдено по артикулу: {len(found_by_article)}')
-
-        # ШАГ 1: нормализуем оставшиеся запросы через ИИ
-        if not queries:
-            logger.info('  Все запросы обработаны по артикулу, AI пропускаем')
-            normalized = []
-        else:
-            full_query = '\n'.join(queries)
-            normalized = await ai_parser.normalize_queries(full_query)
-
-        if normalized is not None:
-            # Проверяем флаги стран → SIM-тип (только для iPhone)
-            flag_sim = _detect_flag_sim(text)
-            if flag_sim:
-                logger.info(f'  [Флаг] Обнаружен флаг → SIM: {flag_sim}')
-
-            for item in normalized:
-                # Флаг применяется только к iPhone и только если AI не определил SIM
-                if flag_sim and not item.get('sim'):
-                    model = item.get('model', '').lower()
-                    if re.match(r'^\d', model):
-                        item['sim'] = flag_sim
-                        logger.info(f'  [Флаг] Применяем SIM={flag_sim} к {item["model"]}')
-
-                result = search.find_by_normalized(item)
-                if result['exact']:
-                    all_found.extend(result['exact'])
-                elif result['similar']:
-                    notify_queries.append({
-                        'raw': full_query,
-                        'ai': ai_parser.build_search_query(item),
-                        'item': item,
-                        'similar': result['similar']
-                    })
-        else:
-            # AI недоступен — уведомляем владельца
-            logger.error('  [AI] OpenAI недоступен! Уведомляем владельца.')
-            if owner_username:
-                try:
-                    await client.send_message(
-                        owner_username,
-                        '🚨 AI-нормализатор недоступен!\n'
-                        f'Запрос от @{username or "неизвестен"} не обработан.\n'
-                        'Проверьте OPENAI_API_KEY и соединение.'
-                    )
-                except Exception:
-                    pass
-
-        # дедупликация — убираем одинаковые товары
-        seen = set()
-        unique_found = []
-        for p in all_found:
-            if p['name'] not in seen:
-                seen.add(p['name'])
-                unique_found.append(p)
-        all_found = unique_found
+        if not ai_ok and owner_username:
+            try:
+                await client.send_message(
+                    owner_username,
+                    '🚨 AI-нормализатор недоступен!\n'
+                    f'Запрос от @{username or "неизвестен"} не обработан.\n'
+                    'Проверьте OPENAI_API_KEY и соединение.'
+                )
+            except Exception:
+                pass
 
         # отправляем юзеру ТОЛЬКО найденные товары
         if all_found and username:
@@ -396,22 +589,5 @@ def register_handlers(client, source_bot, owner_username=None):
             logger.info('  Ничего не найдено, юзеру не пишем')
 
         # уведомляем заказчика о запросах с похожими (но не точными)
-        if notify_queries and owner_username:
-            notify_lines = []
-            for entry in notify_queries:
-                notify_lines.append('🔍 Не смогли найти точно:')
-                notify_lines.append(f'👤 Юзер: @{username or "неизвестен"}')
-                notify_lines.append(f'📝 Написал: "{entry["raw"]}"')
-                notify_lines.append(f'🤖 AI понял: {entry["ai"]}')
-                notify_lines.append('⚠️ Похожие в прайсе (но не совпали):')
-                for p in entry['similar'][:3]:
-                    reason = p.get('_reason', '?')
-                    notify_lines.append(f'  • {p["name"]} — {p["price"]}  [{reason}]')
-
-            try:
-                await client.send_message(
-                    owner_username, '\n'.join(notify_lines)
-                )
-                logger.info(f'  Уведомление → @{owner_username}')
-            except Exception as e:
-                logger.error(f'  Не удалось уведомить @{owner_username}: {e}')
+        who_label = f'@{username}' if username else 'неизвестен'
+        await _notify_owner_similar(client, owner_username, who_label, notify_queries)
