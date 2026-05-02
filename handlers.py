@@ -22,6 +22,12 @@ group_user_last_reply = {}
 # юзеры которым уже писали (для детекции нового чата без API)
 known_users = set()
 
+# буфер уведомлений владельцу (отправляются дайджестом раз в час)
+_owner_notify_buffer = []
+_owner_flusher_started = False
+_OWNER_FLUSH_INTERVAL = 3600  # раз в час
+_TELEGRAM_MSG_LIMIT = 4000    # запас от лимита 4096
+
 # флаги стран → тип SIM (только для iPhone)
 FLAG_TO_SIM = {
     '🇭🇰': 'sim_esim',   # Hong Kong — Sim + eSim
@@ -284,24 +290,78 @@ def _dedup(products):
 
 
 async def _notify_owner_similar(client, owner_id, who_label, notify_queries):
-    """Уведомляет владельца о запросах с похожими (но не точными) совпадениями."""
+    """
+    Кладёт уведомления о похожих в буфер. Сам флушер отправит дайджестом раз в час.
+    Не отправляет мгновенно, чтобы не флудить владельцу.
+    """
     if not notify_queries or not owner_id:
         return
-    lines = []
-    for entry in notify_queries:
-        lines.append('🔍 Не смогли найти точно:')
-        lines.append(f'👤 Юзер: {who_label}')
-        lines.append(f'📝 Написал: "{entry["raw"]}"')
-        lines.append(f'🤖 AI понял: {entry["ai"]}')
-        lines.append('⚠️ Похожие в прайсе (но не совпали):')
-        for p in entry['similar'][:3]:
-            reason = p.get('_reason', '?')
-            lines.append(f'  • {p["name"]} — {p["price"]}  [{reason}]')
-    try:
-        await client.send_message(owner_id, '\n'.join(lines))
-        logger.info(f'  Уведомление → владельцу о {len(notify_queries)} похож.')
-    except Exception as e:
-        logger.error(f'  Не удалось уведомить владельца: {e}')
+    _owner_notify_buffer.append({
+        'ts': time.time(),
+        'who': who_label,
+        'entries': notify_queries,
+    })
+    logger.info(f'  В дайджест: {who_label} → {len(notify_queries)} похож. (всего в буфере: {len(_owner_notify_buffer)})')
+
+
+def _build_digest_chunks(batch):
+    """Собирает сообщения дайджеста с учётом лимита Telegram (4096)."""
+    header = f'📊 Дайджест за час — {len(batch)} запрос(ов) с похожими\n'
+    chunks = []
+    current = header
+
+    for record in batch:
+        ts_str = datetime.fromtimestamp(record['ts'], MSK).strftime('%H:%M')
+        block_lines = [f'\n── {ts_str}  {record["who"]} ──']
+        for entry in record['entries']:
+            block_lines.append(f'📝 "{entry["raw"]}"')
+            block_lines.append(f'🤖 AI: {entry["ai"]}')
+            block_lines.append('⚠️ Похожие:')
+            for p in entry['similar'][:3]:
+                reason = p.get('_reason', '?')
+                block_lines.append(f'  • {p["name"]} — {p["price"]}  [{reason}]')
+        block = '\n'.join(block_lines) + '\n'
+
+        if len(current) + len(block) > _TELEGRAM_MSG_LIMIT:
+            chunks.append(current.rstrip())
+            current = '(продолжение)\n' + block
+        else:
+            current += block
+
+    if current.strip():
+        chunks.append(current.rstrip())
+    return chunks
+
+
+async def _owner_flusher(client, owner_id):
+    """Раз в час сливает буфер уведомлений владельцу одним дайджестом."""
+    logger.info(f'[Дайджест] флушер запущен, интервал {_OWNER_FLUSH_INTERVAL}с')
+    while True:
+        try:
+            await asyncio.sleep(_OWNER_FLUSH_INTERVAL)
+            if not _owner_notify_buffer:
+                continue
+            # snapshot + clear (asyncio single-threaded — атомарно)
+            batch = _owner_notify_buffer.copy()
+            _owner_notify_buffer.clear()
+            chunks = _build_digest_chunks(batch)
+            for chunk in chunks:
+                try:
+                    await client.send_message(owner_id, chunk)
+                except Exception as e:
+                    logger.error(f'[Дайджест] не отправилось: {e}')
+            logger.info(f'[Дайджест] отправлено {len(chunks)} сообщ. ({len(batch)} записей)')
+        except Exception as e:
+            logger.error(f'[Дайджест] ошибка цикла: {e}')
+
+
+def _ensure_owner_flusher(client, owner_id):
+    """Запускает флушер один раз. Безопасно вызывать из любого register_*."""
+    global _owner_flusher_started
+    if _owner_flusher_started or not owner_id:
+        return
+    asyncio.create_task(_owner_flusher(client, owner_id))
+    _owner_flusher_started = True
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -362,6 +422,7 @@ def register_group_handlers(client, group_chats, owner_id=None):
     group_chats — список entity/ID/username, который Telethon примет в chats=.
     owner_id — числовой ID заказчика для уведомлений о похожих.
     """
+    _ensure_owner_flusher(client, owner_id)
 
     @client.on(events.NewMessage(chats=group_chats, incoming=True))
     async def on_group_message(event):
@@ -467,6 +528,7 @@ def register_handlers(client, source_bot, owner_username=None):
     source_bot - числовой ID бота (резолвится один раз при запуске)
     owner_username - числовой ID заказчика для уведомлений
     """
+    _ensure_owner_flusher(client, owner_username)
 
     @client.on(events.NewMessage(from_users=source_bot))
     async def on_bot_message(event):
