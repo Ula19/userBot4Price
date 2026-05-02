@@ -49,9 +49,20 @@ IPHONE_COLOR_MAP = {
 }
 
 
+def _normalize_airpods(text: str) -> str:
+    """'Air Pods 4' / 'airpods 4' / 'AIRPODS 4 anc' → 'airpods 4 anc' (нижний регистр, без пробела внутри airpods)."""
+    return re.sub(r'air\s*pods', 'airpods', text.lower().strip())
+
+
+def _is_airpods(text: str) -> bool:
+    """True если строка относится к AirPods (учитывает 'Air Pods' с пробелом)."""
+    return 'airpods' in _normalize_airpods(text)
+
+
 def _detect_category(model: str) -> str:
     """Определяет категорию товара по полю model из AI-ответа."""
     m = model.lower().strip()
+    if _is_airpods(m):                                   return 'airpods'
     if m.startswith('dyson'):                           return 'dyson'
     if m.startswith('redmi') or m.startswith('xiaomi'):  return 'redmi'
     if m.startswith('macbook'):                          return 'macbook'
@@ -67,6 +78,7 @@ def _detect_category(model: str) -> str:
 def _detect_product_category(name: str) -> str:
     """Определяет категорию товара из прайса по его названию."""
     n = name.lower().strip()
+    if _is_airpods(n):                                   return 'airpods'
     if n.startswith('dyson'):                           return 'dyson'
     if n.startswith('redmi') or n.startswith('xiaomi'):  return 'redmi'
     if n.startswith('macbook'):                          return 'macbook'
@@ -383,6 +395,42 @@ def _search_adapter(item):
     return {'exact': exact, 'similar': []}
 
 
+def _search_airpods(item):
+    """
+    Поиск AirPods — строгое совпадение наборов токенов.
+    Защищает от того что fuzzy спутает "AirPods 4" и "AirPods 4 ANC".
+    """
+    products = price_parser.get_all_products()
+
+    q_tokens = set(_normalize_airpods(item.get('model', '')).split())
+    if 'airpods' not in q_tokens:
+        return {'exact': [], 'similar': []}
+
+    exact = []
+    similar = []
+
+    for product in products:
+        if _detect_product_category(product['name']) != 'airpods':
+            continue
+
+        p_tokens = set(_normalize_airpods(product['name']).split())
+
+        if q_tokens == p_tokens:
+            exact.append(product)
+        else:
+            # для отчёта владельцу — что лишнее у юзера / что лишнее в прайсе
+            extra_in_query = q_tokens - p_tokens
+            extra_in_product = p_tokens - q_tokens
+            reasons = []
+            if extra_in_query:
+                reasons.append(f'у юзера лишнее: {", ".join(sorted(extra_in_query))}')
+            if extra_in_product:
+                reasons.append(f'в прайсе лишнее: {", ".join(sorted(extra_in_product))}')
+            similar.append({**product, '_reason': '; '.join(reasons)})
+
+    return {'exact': exact, 'similar': similar[:5]}
+
+
 def _search_generic(item):
     """Fallback: fuzzy поиск для неизвестных категорий (MacBook и др.)."""
     products = price_parser.get_all_products()
@@ -431,6 +479,8 @@ def find_by_normalized(item):
         result = _search_dyson(item)
     elif category == 'adapter':
         result = _search_adapter(item)
+    elif category == 'airpods':
+        result = _search_airpods(item)
     else:
         result = _search_generic(item)
 
