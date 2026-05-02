@@ -354,14 +354,28 @@ def _search_redmi(item):
     return {'exact': exact, 'similar': similar[:5]}
 
 
+# Код модели Dyson: HD16, HS08, V12s, V15, AM07, TP07, PH01...
+# 1-3 буквы + 1-3 цифры + опционально буква-суффикс (V12s)
+_DYSON_MODEL_CODE = re.compile(r'\b([A-Z]{1,3}\d{1,3}[A-Z]?)\b', re.IGNORECASE)
+
+
+def _extract_dyson_codes(text: str) -> set:
+    """Извлекает все коды модели Dyson из строки (HD16, V12s, ...)."""
+    return {m.group(1).upper() for m in _DYSON_MODEL_CODE.finditer(text)}
+
+
 def _search_dyson(item):
-    """Поиск Dyson — fuzzy matching по модели + цвету."""
+    """
+    Поиск Dyson — fuzzy matching по модели + цвету,
+    но с гейтом по коду модели (HD16 ≠ HS08 даже если цвет совпадает).
+    """
     products = price_parser.get_all_products()
 
     q_full = item['model']
     if item.get('color'):
         q_full += ' ' + item['color']
     q_lower = q_full.lower()
+    q_codes = _extract_dyson_codes(q_full)
 
     exact = []
     similar = []
@@ -371,6 +385,19 @@ def _search_dyson(item):
             continue
 
         p_lower = product['name'].lower()
+        p_codes = _extract_dyson_codes(product['name'])
+
+        # ГЕЙТ: если у юзера указан код модели — он должен совпасть с кодом товара
+        if q_codes:
+            if not p_codes or q_codes.isdisjoint(p_codes):
+                # код не совпал — товар идёт в similar, не в exact
+                reason = f'другая модель: {sorted(p_codes) or "?"} ≠ {sorted(q_codes)}'
+                # добавляем только если хоть какое-то сходство есть (чтобы не засорять отчёт)
+                score = fuzz.token_set_ratio(q_lower, p_lower)
+                if score >= 60:
+                    similar.append({**product, '_score': score, '_reason': reason})
+                continue
+
         score = fuzz.token_set_ratio(q_lower, p_lower)
 
         if score >= 85:
