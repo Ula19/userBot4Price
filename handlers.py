@@ -309,7 +309,7 @@ async def _notify_owner_similar(client, owner_id, who_label, notify_queries):
 # ═══════════════════════════════════════════════════════════════════
 
 _PRODUCT_KEYWORDS = re.compile(
-    r'(iphone|айфон|samsung|galaxy|dyson|macbook|ipad|airpods|'
+    r'(iphone|айфон|samsung|galaxy|dyson|macbook|ipad|airpods|аирподс|эирподс|эирпотс|'
     r'adapter|адаптер|зарядк|наушник|пылесос|фен|стайлер|redmi|xiaomi|pixel|'
     r'ps\d|playstation|плейстейшен|плойк|пс\d|сони|'
     r'xbox|иксбокс|nintendo|нинтендо|свитч|консол|приставк)',
