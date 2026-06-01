@@ -371,6 +371,9 @@ def _ensure_owner_flusher(client, owner_id):
 _PRODUCT_KEYWORDS = re.compile(
     r'(iphone|айфон|samsung|galaxy|dyson|macbook|ipad|airpods|аирподс|эирподс|эирпотс|'
     r'adapter|адаптер|зарядк|наушник|пылесос|фен|стайлер|redmi|xiaomi|pixel|'
+    r'honor|хонор|'
+    r'яндекс|алиса|станци|колонк|'
+    r'dualsense|дуалсенс|джойстик|геймпад|контроллер|'
     r'ps\d|playstation|плейстейшен|плойк|пс\d|сони|'
     r'xbox|иксбокс|nintendo|нинтендо|свитч|консол|приставк)',
     re.I

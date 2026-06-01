@@ -49,6 +49,31 @@ IPHONE_COLOR_MAP = {
 }
 
 
+# синонимы цветов для Android-телефонов (Samsung/Honor): приводим к одному виду
+# grey/gray — одно и то же; фиолетовый ИИ может вернуть как Purple, в прайсе Light Violet
+_ANDROID_COLOR_SYNONYMS = {
+    'grey': 'gray',
+    'purple': 'violet',
+    'lavender': 'violet',
+}
+
+
+def _norm_android_color(color: str) -> str:
+    """Нормализует цвет: grey→gray, purple→violet. Иначе как есть (lowercase)."""
+    c = color.lower().strip()
+    return _ANDROID_COLOR_SYNONYMS.get(c, c)
+
+
+def _android_color_match(q_color: str, p_color: str) -> bool:
+    """
+    Сравнивает цвета Android-телефона с учётом синонимов и составных названий.
+    'purple' ↔ 'Light Violet' (endswith), 'grey' ↔ 'Gray', 'blue' ↔ 'Ocean Blue'.
+    """
+    q = _norm_android_color(q_color)
+    p = _norm_android_color(p_color)
+    return q == p or p.endswith(q)
+
+
 def _normalize_airpods(text: str) -> str:
     """'Air Pods 4' / 'airpods 4' / 'AIRPODS 4 anc' → 'airpods 4 anc' (нижний регистр, без пробела внутри airpods)."""
     return re.sub(r'air\s*pods', 'airpods', text.lower().strip())
@@ -66,6 +91,12 @@ def _detect_category(model: str) -> str:
     if m.startswith('dyson'):                           return 'dyson'
     if m.startswith('redmi') or m.startswith('xiaomi'):  return 'redmi'
     if m.startswith('macbook'):                          return 'macbook'
+    # Яндекс Станция / Алиса — товар на русском
+    if 'яндекс' in m or 'станци' in m or 'алиса' in m:  return 'yandex'
+    # Honor — ДО проверки iPhone (^\d), иначе "600 Lite" улетит в iPhone
+    if m.startswith('honor'):                           return 'honor'
+    if re.match(r'^x\d{1,2}[a-z]$', m):                 return 'honor'  # X6C/X7D/X8D/X9D без префикса
+    if re.match(r'^\d+\s+lite\b', m):                   return 'honor'  # 600 Lite без префикса
     # Samsung: A-серия (A07, A36), S-серия (S25, S25 Ultra), Galaxy/Samsung префикс
     if re.match(r'^[as]\d', m) or 'galaxy' in m or 'samsung' in m:
         return 'samsung'
@@ -82,6 +113,10 @@ def _detect_product_category(name: str) -> str:
     if n.startswith('dyson'):                           return 'dyson'
     if n.startswith('redmi') or n.startswith('xiaomi'):  return 'redmi'
     if n.startswith('macbook'):                          return 'macbook'
+    # Яндекс Станция / Алиса
+    if n.startswith('яндекс') or 'станци' in n:         return 'yandex'
+    # Honor — ДО проверки iPhone (^\d)
+    if n.startswith('honor'):                           return 'honor'
     # Samsung: A-серия и S-серия, Galaxy/Samsung префикс
     if re.match(r'^[as]\d', n) or n.startswith('galaxy') or n.startswith('samsung'):
         return 'samsung'
@@ -173,6 +208,8 @@ def _parse_samsung_product(name):
     'S25 Ultra 12/512 Black'  → {model:'s25', sub:'ultra', memory:'12/512', color:'black'}
     'S25+ 12/256 Blue'        → {model:'s25+', sub:None, memory:'12/256', color:'blue'}
     """
+    # новый прайс пишет с префиксом "Samsung A56...", старый — голое "A56..."
+    name = re.sub(r'^(samsung|galaxy)\s+', '', name, flags=re.IGNORECASE)
     match = re.match(
         r'^([AS]\d+\+?)\s*(5G|Ultra)?\s*(\d+/\d+)\s+(.+)$',
         name, re.IGNORECASE
@@ -200,6 +237,26 @@ def _parse_redmi_product(name):
         return None
     return {
         'model': match.group(1).lower(),
+        'memory': match.group(2),
+        'color': match.group(3).strip().lower(),
+    }
+
+
+def _parse_honor_product(name):
+    """
+    Парсит название Honor из прайса.
+    'Honor X8D 8/256 Black'      → {model:'x8d', memory:'8/256', color:'black'}
+    'Honor 600 Lite 8/256 Grey'  → {model:'600 lite', memory:'8/256', color:'grey'}
+    модель = всё между 'Honor' и памятью (ловит и 'X8D', и '600 Lite').
+    """
+    match = re.match(
+        r'^Honor\s+(.+?)\s+(\d+/\d+)\s+(.+)$',
+        name, re.IGNORECASE
+    )
+    if not match:
+        return None
+    return {
+        'model': match.group(1).strip().lower(),
         'memory': match.group(2),
         'color': match.group(3).strip().lower(),
     }
@@ -299,14 +356,90 @@ def _search_samsung(item):
                     similar.append({**product, '_reason': f'память: просили {q_memory}, есть {p_mem}'})
                     continue
 
-        # ФИЛЬТР 3: Цвет
+        # ФИЛЬТР 3: Цвет (с учётом синонимов: grey≡gray, purple≡violet, blue↔ocean blue)
         if q_color is not None:
-            if q_color != parsed['color']:
+            if not _android_color_match(q_color, parsed['color']):
                 similar.append({**product, '_reason': f'цвет: просили {q_color}, есть {parsed["color"]}'})
                 continue
 
         exact.append(product)
 
+    return {'exact': exact, 'similar': similar[:5]}
+
+
+def _search_honor(item):
+    """Поиск Honor — строгий, как Samsung: модель + память + цвет точно."""
+    products = price_parser.get_all_products()
+
+    # модель из AI: "Honor X8D" / "Honor 600 Lite" → срезаем префикс honor
+    q_model = re.sub(r'^honor\s+', '', item['model'].lower().strip()).strip()
+    q_memory = item.get('memory')
+    q_color = item.get('color', '').lower() if item.get('color') else None
+
+    exact = []
+    similar = []
+
+    for product in products:
+        if _detect_product_category(product['name']) != 'honor':
+            continue
+
+        parsed = _parse_honor_product(product['name'])
+        if not parsed:
+            continue
+
+        # ФИЛЬТР 1: Модель (x8d == x8d, '600 lite' == '600 lite')
+        if q_model != parsed['model']:
+            continue
+
+        # ФИЛЬТР 2: Память
+        if q_memory is not None:
+            p_mem = parsed['memory']
+            if q_memory != p_mem:
+                storage_part = p_mem.split('/')[-1] if '/' in p_mem else p_mem
+                if q_memory != storage_part:
+                    similar.append({**product, '_reason': f'память: просили {q_memory}, есть {p_mem}'})
+                    continue
+
+        # ФИЛЬТР 3: Цвет (с учётом синонимов: grey≡gray, blue↔ocean blue)
+        if q_color is not None:
+            if not _android_color_match(q_color, parsed['color']):
+                similar.append({**product, '_reason': f'цвет: просили {q_color}, есть {parsed["color"]}'})
+                continue
+
+        exact.append(product)
+
+    return {'exact': exact, 'similar': similar[:5]}
+
+
+def _search_yandex(item):
+    """
+    Поиск Яндекс Станции — fuzzy по русскому названию.
+    Прайс на кириллице, ИИ тоже отдаёт русский → token_set_ratio работает.
+    """
+    products = price_parser.get_all_products()
+
+    q_full = item['model']
+    if item.get('color'):
+        q_full += ' ' + item['color']
+    q_lower = q_full.lower()
+
+    exact = []
+    similar = []
+
+    for product in products:
+        if _detect_product_category(product['name']) != 'yandex':
+            continue
+
+        # убираем мусорные скобки "(без часов)" — не мешают сравнению
+        p_lower = re.sub(r'\([^)]*\)', '', product['name'].lower()).strip()
+
+        score = fuzz.token_set_ratio(q_lower, p_lower)
+        if score >= 75:
+            exact.append(product)
+        elif score >= 50:
+            similar.append({**product, '_score': score})
+
+    similar.sort(key=lambda x: x.get('_score', 0), reverse=True)
     return {'exact': exact, 'similar': similar[:5]}
 
 
@@ -500,6 +633,10 @@ def find_by_normalized(item):
         result = _search_iphone(item)
     elif category == 'samsung':
         result = _search_samsung(item)
+    elif category == 'honor':
+        result = _search_honor(item)
+    elif category == 'yandex':
+        result = _search_yandex(item)
     elif category == 'redmi':
         result = _search_redmi(item)
     elif category == 'dyson':
