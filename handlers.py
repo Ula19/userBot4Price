@@ -438,8 +438,10 @@ def register_group_handlers(client, group_chats, owner_id=None):
         except Exception as e:
             logger.warning(f'  [Группа] get_sender: {e}')
             return
+        
         if sender is None or getattr(sender, 'bot', False):
             return
+    
 
         sender_id = sender.id
         username = getattr(sender, 'username', None)
@@ -591,7 +593,7 @@ def register_handlers(client, source_bot, owner_username=None):
 
                 # Имитируем человека: ждём случайное время перед ответом
                 # Моментальный ответ — частая причина спам-бана
-                delay = random.uniform(20, 50)
+                delay = random.uniform(15, 40)
                 logger.info(f'  Жду {delay:.1f}с перед ответом @{username} (анти-спам)...')
                 await asyncio.sleep(delay)
 
