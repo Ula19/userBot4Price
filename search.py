@@ -132,6 +132,18 @@ def _normalize_iphone_color(color):
     return IPHONE_COLOR_MAP.get(color.lower(), color.lower())
 
 
+def _normalize_storage(s):
+    """
+    Приводит объём памяти к единому виду, чтобы '1024'/'1 tb'/'1TB'/'1тб' совпадали.
+    ИИ для терабайта может вернуть '1024' (=1024ГБ) или '1TB', а в прайсе '1TB' → '1tb'.
+    '1024'→'1tb', '2048'→'2tb', '512gb'→'512', '256'→'256'.
+    """
+    if not s:
+        return s
+    s = s.lower().strip().replace(' ', '').replace('тб', 'tb').replace('гб', 'gb').replace('gb', '')
+    return {'1024': '1tb', '2048': '2tb'}.get(s, s)
+
+
 def _parse_iphone_product(name):
     """
     Парсит название iPhone из прайса.
@@ -290,9 +302,9 @@ def _search_iphone(item):
         if q_series != parsed['series']:
             continue
 
-        # ФИЛЬТР 3: Память (если указана — точное совпадение)
+        # ФИЛЬТР 3: Память (если указана — точное совпадение; 1024/1TB/1тб = одно и то же)
         if q_storage is not None:
-            if q_storage.lower() != parsed['storage']:
+            if _normalize_storage(q_storage) != _normalize_storage(parsed['storage']):
                 similar.append({**product, '_reason': f'память: просили {q_storage}, есть {parsed["storage"]}'})
                 continue
 
