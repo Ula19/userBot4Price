@@ -8,6 +8,7 @@ Python (search.py) сам ищет товары по этим полям — б�
 import os
 import json
 import logging
+import httpx
 from openai import OpenAI
 
 logger = logging.getLogger(__name__)
@@ -21,7 +22,11 @@ def _get_client():
     if _client is None:
         api_key = os.getenv('OPENAI_API_KEY')
         if api_key:
-            _client = OpenAI(api_key=api_key)
+            # IP сервера в неподдерживаемой OpenAI стране → 403.
+            # Гоним трафик к OpenAI через тот же прокси, что и Telegram (Германия).
+            proxy = os.getenv('PROXY_URL')
+            http_client = httpx.Client(proxy=proxy, timeout=30) if proxy else None
+            _client = OpenAI(api_key=api_key, http_client=http_client)
     return _client
 
 SYSTEM_PROMPT = """Ты — парсер запросов для магазина электроники.
