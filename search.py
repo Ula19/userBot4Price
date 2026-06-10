@@ -88,6 +88,7 @@ def _detect_category(model: str) -> str:
     """Определяет категорию товара по полю model из AI-ответа."""
     m = model.lower().strip()
     if _is_airpods(m):                                   return 'airpods'
+    if 'dualsense' in m:                                return 'dualsense'
     if m.startswith('dyson'):                           return 'dyson'
     if m.startswith('redmi') or m.startswith('xiaomi'):  return 'redmi'
     if m.startswith('macbook'):                          return 'macbook'
@@ -110,6 +111,7 @@ def _detect_product_category(name: str) -> str:
     """Определяет категорию товара из прайса по его названию."""
     n = name.lower().strip()
     if _is_airpods(n):                                   return 'airpods'
+    if 'dualsense' in n:                                return 'dualsense'
     if n.startswith('dyson'):                           return 'dyson'
     if n.startswith('redmi') or n.startswith('xiaomi'):  return 'redmi'
     if n.startswith('macbook'):                          return 'macbook'
@@ -603,6 +605,38 @@ def _search_airpods(item):
     return {'exact': exact, 'similar': similar[:5]}
 
 
+def _search_dualsense(item):
+    """
+    Поиск геймпадов Sony DualSense — строгое разделение под-моделей.
+    Обычный DualSense и DualSense Edge — РАЗНЫЕ товары (5к vs 15к).
+    Запрос без 'edge' не должен подтягивать Edge, и наоборот.
+    Цвет (если указан) фильтруем как у Android: 'Red' ↔ 'Cosmic Red'.
+    """
+    products = price_parser.get_all_products()
+
+    model = (item.get('model') or '').lower()
+    q_is_edge = 'edge' in model
+    q_color = item.get('color')
+
+    exact = []
+    for product in products:
+        name = product['name'].lower()
+        if _detect_product_category(name) != 'dualsense':
+            continue
+        if ('edge' in name) != q_is_edge:
+            continue  # Edge и обычный геймпад не смешиваем
+
+        if q_color:
+            # цвет в прайсе = остаток после "sony dualsense [edge]"
+            p_color = name.replace('sony', '').replace('dualsense', '').replace('edge', '').strip()
+            if not _android_color_match(q_color, p_color):
+                continue
+
+        exact.append(product)
+
+    return {'exact': exact, 'similar': []}
+
+
 def _search_generic(item):
     """Fallback: fuzzy поиск для неизвестных категорий (MacBook и др.)."""
     products = price_parser.get_all_products()
@@ -657,6 +691,8 @@ def find_by_normalized(item):
         result = _search_adapter(item)
     elif category == 'airpods':
         result = _search_airpods(item)
+    elif category == 'dualsense':
+        result = _search_dualsense(item)
     else:
         result = _search_generic(item)
 
