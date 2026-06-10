@@ -612,7 +612,7 @@ def register_handlers(client, source_bot, owner_username=None):
                 recipient = user_id
 
                 try:
-                    typing_time = random.uniform(5, 15)
+                    typing_time = random.uniform(5, 10)
                     logger.info(f'  Имитирую набор текста для @{username} ({typing_time:.1f}с)...')
                     async with client.action(recipient, 'typing'):
                         await asyncio.sleep(typing_time)
