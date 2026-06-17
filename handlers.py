@@ -208,7 +208,12 @@ def format_response(results):
     lines = []
 
     for product in results:
-        lines.append(f'{product["name"]} — {product["price"]}')
+        line = f'{product["name"]} — {product["price"]}'
+        # хвост из прайса (заметки вроде "(с царапиной на коробке)")
+        tail = product.get('tail')
+        if tail:
+            line += f' {tail}'
+        lines.append(line)
 
     if not lines:
         return None
@@ -283,8 +288,11 @@ def _dedup(products):
     seen = set()
     out = []
     for p in products:
-        if p['name'] not in seen:
-            seen.add(p['name'])
+        # ключ = название + цена + хвост: разные варианты одной модели
+        # (например "с царапиной" дешевле) не должны схлопываться в один
+        key = (p['name'], p['price'], p.get('tail', ''))
+        if key not in seen:
+            seen.add(key)
             out.append(p)
     return out
 
