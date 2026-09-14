@@ -5,11 +5,14 @@ import asyncio
 import json
 import os
 import logging
+from collections import Counter
 from datetime import datetime, timezone, timedelta
 from telethon import events, errors
 import search
 import id_resolver
 import ai_parser
+import group_rules
+import brand_detector
 
 logger = logging.getLogger(__name__)
 
@@ -376,23 +379,6 @@ def _ensure_owner_flusher(client, owner_id):
 # GROUP-РЕЖИМ: мониторинг обычных Telegram-групп
 # ═══════════════════════════════════════════════════════════════════
 
-_PRODUCT_KEYWORDS = re.compile(
-    r'(iphone|айфон|samsung|galaxy|dyson|macbook|ipad|airpods|аирподс|эирподс|эирпотс|'
-    r'adapter|адаптер|зарядк|наушник|пылесос|фен|стайлер|redmi|xiaomi|pixel|'
-    r'honor|хонор|'
-    r'яндекс|алиса|станци|колонк|'
-    r'dualsense|дуалсенс|джойстик|геймпад|контроллер|'
-    r'ps\d|playstation|плейстейшен|плойк|пс\d|сони|'
-    r'xbox|иксбокс|nintendo|нинтендо|свитч|консол|приставк)',
-    re.I
-)
-_IPHONE_GEN = re.compile(r'\b(1[4-9])\b')
-_SOFT_MARKERS = re.compile(
-    r'(есть|почём|почем|сколько|куплю|ищу|надо|нужен|нужна|нужно|цена|price)',
-    re.I
-)
-
-
 def _split_for_article(text):
     """Разбивает сырой текст по переводам строк и запятым для find_by_article."""
     parts = []
@@ -404,26 +390,22 @@ def _split_for_article(text):
     return parts or [text]
 
 
-def _classify_group_message(text):
-    """'yes' — явный запрос, 'no' — точно не запрос, 'maybe' — спорный (отдать в AI)."""
-    t = (text or '').strip()
-    if len(t) < 4 or t.startswith('/'):
-        return 'no'
+# статистика групп за час: сколько пришло, сколько и почему отсеяно, сколько ответили
+_group_stats = Counter()
 
-    # артикул Apple в любой из частей
-    for part in _split_for_article(t):
-        m = search._ARTICLE_PATTERN.search(part)
-        if m and search._is_valid_article(m.group(0).upper()):
-            return 'yes'
 
-    if _PRODUCT_KEYWORDS.search(t) or _IPHONE_GEN.search(t):
-        return 'yes'
-
-    has_digit = any(c.isdigit() for c in t)
-    if has_digit and _SOFT_MARKERS.search(t):
-        return 'maybe'
-
-    return 'no'
+async def _group_stats_logger():
+    """Раз в час пишет в лог статистику групп — видно, что режет фильтр брендов."""
+    while True:
+        try:
+            await asyncio.sleep(_OWNER_FLUSH_INTERVAL)
+            if not _group_stats:
+                continue
+            parts = ', '.join(f'{k}={v}' for k, v in _group_stats.most_common())
+            logger.info(f'[Группы за час] {parts} | из кеша ИИ (с запуска, все режимы): {ai_parser.cache_hits}')
+            _group_stats.clear()
+        except Exception as e:
+            logger.error(f'[Группы] ошибка статистики: {e}')
 
 
 def register_group_handlers(client, group_chats, owner_id=None):
@@ -434,6 +416,7 @@ def register_group_handlers(client, group_chats, owner_id=None):
     owner_id — числовой ID заказчика для уведомлений о похожих.
     """
     _ensure_owner_flusher(client, owner_id)
+    asyncio.create_task(_group_stats_logger())
 
     @client.on(events.NewMessage(chats=group_chats, incoming=True))
     async def on_group_message(event):
@@ -444,32 +427,45 @@ def register_group_handlers(client, group_chats, owner_id=None):
         if not is_work_time():
             return
 
+        _group_stats['всего'] += 1
+
+        # фильтр брендов из канала прайса — проверяем ДО запросов к Telegram и ИИ
+        brands = group_rules.get_brands(event.chat_id)
+        if not brands:
+            _group_stats['отсев:нет_фильтра'] += 1
+            return
+        if group_rules.is_too_long(text):
+            _group_stats['отсев:длинное'] += 1
+            return
+        brand = brand_detector.find_brand(text, brands)
+        if not brand:
+            _group_stats['отсев:не_тот_бренд'] += 1
+            return
+
         try:
             sender = await event.get_sender()
         except Exception as e:
             logger.warning(f'  [Группа] get_sender: {e}')
             return
-        
+
         if sender is None or getattr(sender, 'bot', False):
+            _group_stats['отсев:бот'] += 1
             return
-    
 
         sender_id = sender.id
         username = getattr(sender, 'username', None)
         who_label = f'@{username}' if username else f'id:{sender_id}'
 
-        verdict = _classify_group_message(text)
-        if verdict == 'no':
-            return
-
         now = time.time()
         last = group_user_last_reply.get(sender_id)
         if last and now - last < 60:
+            _group_stats['отсев:кулдаун'] += 1
             logger.warning(f'  [Группа/Анти-спам] {who_label}: прошло {int(now-last)}с из 60с')
             return
         group_user_last_reply[sender_id] = now
 
-        logger.info(f'Новый запрос из группы {event.chat_id} от {who_label} (classify={verdict})')
+        _group_stats[f'прошло:{brand}'] += 1
+        logger.info(f'Новый запрос из группы {event.chat_id} от {who_label} (бренд: {brand})')
 
         queries_list = _split_for_article(text)
         all_found, notify_queries, ai_ok = await _search_products(queries_list, text)
@@ -503,6 +499,7 @@ def register_group_handlers(client, group_chats, owner_id=None):
             except errors.FloodWaitError as e:
                 if e.seconds > 300:
                     logger.error(f'  [Флуд] бан {e.seconds}с — пропускаем {who_label}')
+                    _group_stats['ошибка:флуд'] += 1
                     return
                 logger.warning(f'  [Флуд] ждём {e.seconds}с для {who_label}')
                 await asyncio.sleep(e.seconds + 2)
@@ -516,12 +513,15 @@ def register_group_handlers(client, group_chats, owner_id=None):
             except Exception as e:
                 logger.warning(f'  [Группа] ЛС не вышло ({type(e).__name__}: {e}), fallback в группу')
 
-            if not sent_to_dm:
+            if sent_to_dm:
+                _group_stats['ответов'] += 1
+            else:
                 try:
                     typing_time = random.uniform(5, 10)
                     async with client.action(event.chat_id, 'typing'):
                         await asyncio.sleep(typing_time)
                     await event.reply(response)
+                    _group_stats['ответов'] += 1
                     logger.info(f'  Ответ отправлен reply в группу {event.chat_id}')
                 except Exception as e:
                     logger.error(f'  [Группа] reply не удался: {e}')

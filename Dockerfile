@@ -15,6 +15,8 @@ COPY ai_parser.py .
 COPY id_resolver.py .
 COPY aliases.py .
 COPY examples.py .
+COPY group_rules.py .
+COPY brand_detector.py .
 
 # запуск
 CMD ["python3", "bot.py"]

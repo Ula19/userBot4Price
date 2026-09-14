@@ -70,7 +70,7 @@ async def load_examples(client, chat_id):
     global telegram_examples, _client, _chat_id
     _client = client
     _chat_id = chat_id
-    telegram_examples = {}
+    found_examples = {}
 
     entity = 'me' if chat_id == 'me' else int(chat_id)
 
@@ -79,8 +79,10 @@ async def load_examples(client, chat_id):
             'ПРИМЕР' in message.text.upper()
         ) and '[' in message.text:
             found = parse_examples_message(message.text)
-            telegram_examples.update(found)
+            found_examples.update(found)
 
+    # подменяем целиком в конце — пока идёт загрузка, работают старые примеры
+    telegram_examples = found_examples
     if telegram_examples:
         logger.info(f'Загружено примеров: {len(telegram_examples)}')
     else:

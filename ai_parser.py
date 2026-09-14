@@ -7,6 +7,7 @@ Python (search.py) сам ищет товары по этим полям — б�
 """
 import os
 import json
+import time
 import logging
 import httpx
 from openai import OpenAI
@@ -15,6 +16,31 @@ logger = logging.getLogger(__name__)
 
 # ленивая инициализация — чтобы load_dotenv() успел отработать до первого вызова
 _client = None
+
+# кеш ответов ИИ: один и тот же запрос часто кидают в несколько групп подряд
+_CACHE_TTL = 1800   # 30 минут
+_CACHE_MAX = 500
+_result_cache = {}  # нормализованный текст → (время, результат)
+cache_hits = 0
+
+
+def _cache_key(text):
+    return ' '.join(text.lower().split())
+
+
+def is_cached(text):
+    """True, если на этот текст есть свежий ответ ИИ (вызова API не будет)."""
+    entry = _result_cache.get(_cache_key(text))
+    return entry is not None and time.time() - entry[0] < _CACHE_TTL
+
+
+def _cache_put(text, result):
+    """Кладёт ответ в кеш; при переполнении выкидывает самую старую запись."""
+    key = _cache_key(text)
+    _result_cache.pop(key, None)
+    if len(_result_cache) >= _CACHE_MAX:
+        del _result_cache[next(iter(_result_cache))]
+    _result_cache[key] = (time.time(), result)
 
 
 def _get_client():
@@ -193,9 +219,17 @@ async def normalize_queries(text: str):
         list[dict] — [{model, memory, color, sim}, ...] — нормализованные товары
         None — если ИИ недоступен (для fallback на прямой поиск)
     """
+    global cache_hits
+
     if not _get_client():
         logger.warning('OpenAI API ключ не настроен, используем прямой поиск')
         return None
+
+    if is_cached(text):
+        cache_hits += 1
+        logger.info(f'  [ИИ] Из кеша, без вызова API: "{text[:80]}"')
+        # копии, чтобы правки в handlers (sim по флагу) не портили кеш
+        return [dict(item) for item in _result_cache[_cache_key(text)][1]]
 
     user_message = f'ЗАПРОС КЛИЕНТА: "{text}"'
 
@@ -238,7 +272,8 @@ async def normalize_queries(text: str):
             q = build_search_query(item)
             logger.info(f'    → "{q}" | sim={item.get("sim")}')
 
-        return result
+        _cache_put(text, result)
+        return [dict(item) for item in result]
 
     except json.JSONDecodeError as e:
         logger.error(f'ИИ вернул невалидный JSON: {e}')

@@ -1,7 +1,11 @@
 import re
 import logging
+import group_rules
 
 logger = logging.getLogger(__name__)
+
+# строка прайса: «Название — Цена» (используется и в group_rules, чтобы не путать товар с фильтром)
+PRICE_LINE_RE = re.compile(r'^(.+?)\s*[—–\-]\s*([\d]+[.\d]*)')
 
 # тут храним все товары из прайса
 # каждый товар - словарь с name и price
@@ -43,10 +47,7 @@ def parse_price_message(text):
 
         # ищем строку с ценой: "название — цена"
         # всё на одной строке, после цены может быть что угодно (игнорируем)
-        match = re.match(
-            r'^(.+?)\s*[—–\-]\s*([\d]+[.\d]*)',
-            line
-        )
+        match = PRICE_LINE_RE.match(line)
 
         if match:
             name = match.group(1).strip()
@@ -69,7 +70,8 @@ async def load_prices(client, chat_id):
     global products, _client, _chat_id
     _client = client
     _chat_id = chat_id
-    products = []
+    # собираем в новый список и подменяем в конце — пока идёт загрузка, поиск видит старый прайс
+    new_products = []
 
     # определяем чат
     entity = 'me' if chat_id == 'me' else int(chat_id)
@@ -79,9 +81,11 @@ async def load_prices(client, chat_id):
     # читаем последние сообщения из чата
     async for message in client.iter_messages(entity, limit=100):
         if message.text:
-            found = parse_price_message(message.text)
-            products.extend(found)
+            # строки фильтров групп — не товары ('Единственный -1001234567890 фильтр:')
+            found = parse_price_message(group_rules.strip_rules(message.text))
+            new_products.extend(found)
 
+    products = new_products
     logger.info(f'Загружено товаров: {len(products)}')
     return products
 

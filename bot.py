@@ -1,13 +1,15 @@
 import os
+import asyncio
 import logging
 import socks
 from urllib.parse import urlparse
 from dotenv import load_dotenv
-from telethon import TelegramClient, events
+from telethon import TelegramClient, events, utils
 import price_parser
 import handlers
 import aliases
 import examples
+import group_rules
 
 # загружаем переменные из .env
 load_dotenv()
@@ -55,22 +57,66 @@ if _proxy:
 client = TelegramClient(SESSION_PATH, API_ID, API_HASH, proxy=_proxy)
 
 
+PRICE_CHAT = 'me' if PRICE_CHAT_ID == 'me' else int(PRICE_CHAT_ID)
+
+
+# перезагрузки чата прайса не должны идти параллельно (иначе лишние запросы к Telegram)
+_reload_lock = asyncio.Lock()
+_reload_again = False
+
+
+async def _reload_price_chat():
+    """
+    перечитываем из чата прайса всё: фильтры групп, товары, алиасы и примеры.
+    пачку событий подряд схлопываем: пока идёт перезагрузка, новые события просят ещё одну.
+    """
+    global _reload_again
+    if _reload_lock.locked():
+        _reload_again = True
+        return
+
+    async with _reload_lock:
+        while True:
+            _reload_again = False
+            # каждый шаг отдельно: ошибка в одном не отменяет остальные
+            for name, reload in (('фильтры групп', group_rules.reload_rules),
+                                 ('прайс', price_parser.reload_prices),
+                                 ('алиасы', aliases.reload_aliases),
+                                 ('примеры', examples.reload_examples)):
+                try:
+                    await reload()
+                except Exception as e:
+                    logger.error(f'Не удалось перезагрузить {name}: {e}')
+            if not _reload_again:
+                break
+
+
 # при любом изменении в чате прайса - перезагружаем весь прайс
-# но игнорируем наши собственные сообщения (event.out)
-@client.on(events.NewMessage(chats='me' if PRICE_CHAT_ID == 'me' else int(PRICE_CHAT_ID)))
+@client.on(events.NewMessage(chats=PRICE_CHAT))
 async def on_price_new(event):
     """новое сообщение в чате прайса - перезагружаем всё"""
-    await price_parser.reload_prices()
-    await aliases.reload_aliases()
-    await examples.reload_examples()
+    await _reload_price_chat()
 
 
-@client.on(events.MessageEdited(chats='me' if PRICE_CHAT_ID == 'me' else int(PRICE_CHAT_ID)))
+@client.on(events.MessageEdited(chats=PRICE_CHAT))
 async def on_price_edit(event):
     """сообщение отредактировано в чате прайса - перезагружаем всё"""
-    await price_parser.reload_prices()
-    await aliases.reload_aliases()
-    await examples.reload_examples()
+    await _reload_price_chat()
+
+
+@client.on(events.MessageDeleted())
+async def on_message_delete(event):
+    """
+    удалили сообщение (например, фильтр группы) - перезагружаем всё.
+    для канала Telegram присылает chat_id; для обычной группы и 'me' chat_id нет —
+    тогда сверяем ID удалённых сообщений с сообщениями чата прайса.
+    """
+    if event.chat_id is not None:
+        if PRICE_CHAT == 'me' or event.chat_id != PRICE_CHAT:
+            return
+    elif not group_rules.knows_message(event.deleted_ids):
+        return
+    await _reload_price_chat()
 
 
 async def main():
@@ -85,6 +131,7 @@ async def main():
     await price_parser.load_prices(client, PRICE_CHAT_ID)
     await aliases.load_aliases(client, PRICE_CHAT_ID)
     await examples.load_examples(client, PRICE_CHAT_ID)
+    await group_rules.load_rules(client, PRICE_CHAT_ID)
 
     # резолвим username'ы в числовые ID (один раз при старте)
     # если в .env уже числовой ID — используем напрямую (без API)
@@ -127,7 +174,11 @@ async def main():
             else:
                 entity = await client.get_input_entity(raw)
             group_entities.append(entity)
-            logger.info(f'Группа: {raw} → ок')
+            brands = group_rules.get_brands(utils.get_peer_id(entity))
+            if brands:
+                logger.info(f'Группа: {raw} → ок, фильтр: {", ".join(sorted(brands))}')
+            else:
+                logger.warning(f'Группа: {raw} → нет фильтра в канале прайса, в ней бот молчит')
         except Exception as e:
             logger.error(f'Не удалось найти группу {raw}: {e}')
 

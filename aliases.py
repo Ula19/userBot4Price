@@ -59,7 +59,7 @@ async def load_aliases(client, chat_id):
     global telegram_aliases, _client, _chat_id
     _client = client
     _chat_id = chat_id
-    telegram_aliases = {}
+    found_aliases = {}
 
     entity = 'me' if chat_id == 'me' else int(chat_id)
 
@@ -68,8 +68,10 @@ async def load_aliases(client, chat_id):
             '📝' in message.text or 'АЛИАС' in message.text.upper()
         ):
             found = parse_aliases_message(message.text)
-            telegram_aliases.update(found)
+            found_aliases.update(found)
 
+    # подменяем целиком в конце — пока идёт загрузка, работают старые алиасы
+    telegram_aliases = found_aliases
     if telegram_aliases:
         logger.info(f'Загружено алиасов: {len(telegram_aliases)}')
         for key, value in telegram_aliases.items():
