@@ -208,7 +208,12 @@ def format_response(results):
     lines = []
 
     for product in results:
-        lines.append(f'{product["name"]} — {product["price"]}')
+        line = f'{product["name"]} — {product["price"]}'
+        # хвост из прайса (заметки вроде "(с царапиной на коробке)")
+        tail = product.get('tail')
+        if tail:
+            line += f' {tail}'
+        lines.append(line)
 
     if not lines:
         return None
@@ -283,8 +288,11 @@ def _dedup(products):
     seen = set()
     out = []
     for p in products:
-        if p['name'] not in seen:
-            seen.add(p['name'])
+        # ключ = название + цена + хвост: разные варианты одной модели
+        # (например "с царапиной" дешевле) не должны схлопываться в один
+        key = (p['name'], p['price'], p.get('tail', ''))
+        if key not in seen:
+            seen.add(key)
             out.append(p)
     return out
 
@@ -371,6 +379,9 @@ def _ensure_owner_flusher(client, owner_id):
 _PRODUCT_KEYWORDS = re.compile(
     r'(iphone|айфон|samsung|galaxy|dyson|macbook|ipad|airpods|аирподс|эирподс|эирпотс|'
     r'adapter|адаптер|зарядк|наушник|пылесос|фен|стайлер|redmi|xiaomi|pixel|'
+    r'honor|хонор|'
+    r'яндекс|алиса|станци|колонк|'
+    r'dualsense|дуалсенс|джойстик|геймпад|контроллер|'
     r'ps\d|playstation|плейстейшен|плойк|пс\d|сони|'
     r'xbox|иксбокс|nintendo|нинтендо|свитч|консол|приставк)',
     re.I
@@ -593,7 +604,7 @@ def register_handlers(client, source_bot, owner_username=None):
 
                 # Имитируем человека: ждём случайное время перед ответом
                 # Моментальный ответ — частая причина спам-бана
-                delay = random.uniform(15, 40)
+                delay = random.uniform(10, 20)
                 logger.info(f'  Жду {delay:.1f}с перед ответом @{username} (анти-спам)...')
                 await asyncio.sleep(delay)
 
@@ -609,7 +620,7 @@ def register_handlers(client, source_bot, owner_username=None):
                 recipient = user_id
 
                 try:
-                    typing_time = random.uniform(10, 20)
+                    typing_time = random.uniform(5, 10)
                     logger.info(f'  Имитирую набор текста для @{username} ({typing_time:.1f}с)...')
                     async with client.action(recipient, 'typing'):
                         await asyncio.sleep(typing_time)

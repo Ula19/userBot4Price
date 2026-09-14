@@ -51,9 +51,12 @@ def parse_price_message(text):
         if match:
             name = match.group(1).strip()
             price = match.group(2).strip()
+            # всё после цены (заметки вроде "(с царапиной на коробке)")
+            # количество в прайс больше не пишут, поэтому ничего не режем
+            tail = line[match.end():].strip()
 
-            found.append({'name': name, 'price': price})
-            logger.info(f'  {name} — {price}')
+            found.append({'name': name, 'price': price, 'tail': tail})
+            logger.info(f'  {name} — {price} {tail}'.rstrip())
 
     return found
 
