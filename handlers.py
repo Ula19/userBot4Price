@@ -408,6 +408,18 @@ async def _group_stats_logger():
             logger.error(f'[Группы] ошибка статистики: {e}')
 
 
+def _group_test_mode():
+    """GROUP_TEST_MODE=1 в .env — локальный тест групп: без рабочих часов, сообщения ботов не пропускаем."""
+    return os.getenv('GROUP_TEST_MODE', '').strip().lower() in ('1', 'true', 'yes', 'да')
+
+
+def _group_skip(reason, chat_id, test_mode):
+    """Считает отсев в статистике; в тестовом режиме ещё и пишет причину в лог."""
+    _group_stats[f'отсев:{reason}'] += 1
+    if test_mode:
+        logger.info(f'  [Группа/тест] {chat_id}: не отвечаем — {reason}')
+
+
 def register_group_handlers(client, group_chats, owner_id=None):
     """
     Регистрирует обработчик сообщений в обычных группах.
@@ -417,6 +429,8 @@ def register_group_handlers(client, group_chats, owner_id=None):
     """
     _ensure_owner_flusher(client, owner_id)
     asyncio.create_task(_group_stats_logger())
+    if _group_test_mode():
+        logger.warning('ТЕСТОВЫЙ РЕЖИМ ГРУПП (GROUP_TEST_MODE): без рабочих часов, отвечаем и ботам — на проде выключить!')
 
     @client.on(events.NewMessage(chats=group_chats, incoming=True))
     async def on_group_message(event):
@@ -424,7 +438,8 @@ def register_group_handlers(client, group_chats, owner_id=None):
         if not text or event.out:
             return
 
-        if not is_work_time():
+        test_mode = _group_test_mode()
+        if not test_mode and not is_work_time():
             return
 
         _group_stats['всего'] += 1
@@ -432,14 +447,14 @@ def register_group_handlers(client, group_chats, owner_id=None):
         # фильтр брендов из канала прайса — проверяем ДО запросов к Telegram и ИИ
         brands = group_rules.get_brands(event.chat_id)
         if not brands:
-            _group_stats['отсев:нет_фильтра'] += 1
+            _group_skip('нет_фильтра', event.chat_id, test_mode)
             return
         if group_rules.is_too_long(text):
-            _group_stats['отсев:длинное'] += 1
+            _group_skip('длинное', event.chat_id, test_mode)
             return
         brand = brand_detector.find_brand(text, brands)
         if not brand:
-            _group_stats['отсев:не_тот_бренд'] += 1
+            _group_skip('не_тот_бренд', event.chat_id, test_mode)
             return
 
         try:
@@ -448,8 +463,9 @@ def register_group_handlers(client, group_chats, owner_id=None):
             logger.warning(f'  [Группа] get_sender: {e}')
             return
 
-        if sender is None or getattr(sender, 'bot', False):
-            _group_stats['отсев:бот'] += 1
+        # боты — не покупатели (в тестовом режиме пропускаем, чтобы слать запросы через test_group_send.py)
+        if sender is None or (getattr(sender, 'bot', False) and not test_mode):
+            _group_skip('бот', event.chat_id, test_mode)
             return
 
         sender_id = sender.id
@@ -459,7 +475,7 @@ def register_group_handlers(client, group_chats, owner_id=None):
         now = time.time()
         last = group_user_last_reply.get(sender_id)
         if last and now - last < 60:
-            _group_stats['отсев:кулдаун'] += 1
+            _group_skip('кулдаун', event.chat_id, test_mode)
             logger.warning(f'  [Группа/Анти-спам] {who_label}: прошло {int(now-last)}с из 60с')
             return
         group_user_last_reply[sender_id] = now
