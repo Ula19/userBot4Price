@@ -5,6 +5,8 @@ import asyncio
 import json
 import os
 import logging
+import functools
+import contextvars
 from collections import Counter
 from datetime import datetime, timezone, timedelta
 from telethon import events, errors
@@ -16,6 +18,33 @@ import group_rules
 import brand_detector
 
 logger = logging.getLogger(__name__)
+
+# откуда пришёл запрос — подставляется в каждую строку лога, пока запрос обрабатывается
+# (у каждого запроса своя asyncio-задача, поэтому параллельные запросы не путаются)
+_log_source = contextvars.ContextVar('log_source', default='')
+
+
+class LogSourceFilter(logging.Filter):
+    """Добавляет в запись лога поле source: '[бот] ' или '[группа -100…] ' (пусто вне запроса)."""
+
+    def filter(self, record):
+        source = _log_source.get()
+        record.source = f'[{source}] ' if source else ''
+        return True
+
+
+def _log_as(label):
+    """Декоратор хендлера: все логи во время обработки запроса (и в ai_parser, search) помечаются источником."""
+    def decorator(handler):
+        @functools.wraps(handler)
+        async def wrapper(event):
+            token = _log_source.set(label(event))
+            try:
+                return await handler(event)
+            finally:
+                _log_source.reset(token)
+        return wrapper
+    return decorator
 
 # имитация человека перед ответом (одинаково для SOURCE_BOT и групп): пауза + набор текста, секунды
 REPLY_DELAY = (10, 20)
@@ -497,6 +526,7 @@ def register_group_handlers(client, group_chats, owner_id=None):
         logger.warning('ТЕСТОВЫЙ РЕЖИМ ГРУПП (GROUP_TEST_MODE): без рабочих часов, причина отсева в логе — на проде выключить!')
 
     @client.on(events.NewMessage(chats=group_chats, incoming=True))
+    @_log_as(lambda event: f'группа {event.chat_id}')
     async def on_group_message(event):
         text = event.raw_text
         if not text or event.out:
@@ -579,6 +609,7 @@ def register_handlers(client, source_bot, owner_username=None):
     _ensure_owner_flusher(client, owner_username)
 
     @client.on(events.NewMessage(from_users=source_bot))
+    @_log_as(lambda event: 'бот')
     async def on_bot_message(event):
         """пришло сообщение от бота - ищем цены и отвечаем юзеру"""
         text = event.text

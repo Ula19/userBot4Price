@@ -15,10 +15,13 @@ import group_rules
 load_dotenv()
 
 # настраиваем логирование чтобы видеть что происходит
+# %(source)s — откуда запрос: [бот] или [группа -100…] (пусто для служебных логов)
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
+    format='%(asctime)s - %(levelname)s - %(source)s%(message)s'
 )
+for _handler in logging.getLogger().handlers:
+    _handler.addFilter(handlers.LogSourceFilter())
 logger = logging.getLogger(__name__)
 
 # убираем мусорные INFO-логи Telethon (Got difference, Connecting, etc.)
