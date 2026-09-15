@@ -447,12 +447,7 @@ def _group_test_mode():
     return os.getenv('GROUP_TEST_MODE', '').strip().lower() in ('1', 'true', 'yes', 'да')
 
 
-def _group_self_test():
-    """GROUP_SELF_TEST=1 в .env — свои сообщения в группе обрабатываются как запросы, результат идёт в Избранное."""
-    return os.getenv('GROUP_SELF_TEST', '').strip().lower() in ('1', 'true', 'yes', 'да')
-
-
-# тексты наших ответов reply в группах — чтобы при GROUP_SELF_TEST не принять свой же ответ за запрос
+# тексты наших ответов reply в группах — чтобы не принять свой же ответ за новый запрос
 _own_group_replies = deque(maxlen=50)
 
 
@@ -527,26 +522,6 @@ async def _send_group_reply(client, event, sender, who_label, response):
         return False
 
 
-async def _handle_self_test(client, event, text, brand):
-    """Свой запрос в группе (GROUP_SELF_TEST=1): ищем как обычно, результат сразу в Избранное, без задержек."""
-    _group_stats[f'тест:{brand}'] += 1
-    logger.info(f'Тестовый запрос (свой) из группы {event.chat_id} (бренд: {brand})')
-
-    all_found, _, ai_ok = await _search_products(_split_for_article(text), text)
-    if all_found:
-        result = format_response(all_found)
-    elif not ai_ok:
-        result = '🚨 ИИ недоступен — запрос не обработан'
-    else:
-        result = '❌ в прайсе ничего не найдено'
-
-    try:
-        await client.send_message('me', f'🧪 Тест из группы {event.chat_id} (бренд: {brand})\nЗапрос: {text}\n\n{result}')
-        logger.info('  [Группа/тест] результат отправлен в Избранное')
-    except Exception as e:
-        logger.error(f'  [Группа/тест] не удалось отправить в Избранное: {e}')
-
-
 def register_group_handlers(client, group_chats, owner_id=None):
     """
     Регистрирует обработчик сообщений в обычных группах.
@@ -558,10 +533,8 @@ def register_group_handlers(client, group_chats, owner_id=None):
     asyncio.create_task(_group_stats_logger())
     if _group_test_mode():
         logger.warning('ТЕСТОВЫЙ РЕЖИМ ГРУПП (GROUP_TEST_MODE): без рабочих часов, причина отсева в логе — на проде выключить!')
-    if _group_self_test():
-        logger.warning('GROUP_SELF_TEST: свои сообщения в группах идут в поиск, результат — в Избранное')
 
-    # слушаем и входящие, и свои сообщения (свои — только при GROUP_SELF_TEST=1)
+    # слушаем и свои сообщения: на свой запрос бот ответит себе в ЛС — это Избранное (как в режиме SOURCE_BOT)
     @client.on(events.NewMessage(chats=group_chats))
     @_log_as(lambda event: f'группа {event.chat_id}')
     async def on_group_message(event):
@@ -569,11 +542,11 @@ def register_group_handlers(client, group_chats, owner_id=None):
         if not text:
             return
 
-        self_test = event.out
-        if self_test and (not _group_self_test() or _normalize_reply_text(text) in _own_group_replies):
+        # наш же ответ reply в группе — не запрос
+        if event.out and _normalize_reply_text(text) in _own_group_replies:
             return
 
-        test_mode = _group_test_mode() or self_test
+        test_mode = _group_test_mode()
         if not test_mode and not is_work_time():
             return
 
@@ -590,10 +563,6 @@ def register_group_handlers(client, group_chats, owner_id=None):
         brand = brand_detector.find_brand(text, brands)
         if not brand:
             _group_skip('не_тот_бренд', event.chat_id, test_mode)
-            return
-
-        if self_test:
-            await _handle_self_test(client, event, text, brand)
             return
 
         try:
