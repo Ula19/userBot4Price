@@ -16,6 +16,7 @@ import id_resolver
 import ai_parser
 import group_rules
 import brand_detector
+import price_check
 
 logger = logging.getLogger(__name__)
 
@@ -563,6 +564,14 @@ def register_group_handlers(client, group_chats, owner_id=None):
         brand = brand_detector.find_brand(text, brands)
         if not brand:
             _group_skip('не_тот_бренд', event.chat_id, test_mode)
+            return
+
+        # модель распознана точно и её нет в прайсе — ИИ не зовём (не уверены — идём в ИИ как обычно)
+        verdict, models = price_check.check(text, brands)
+        if verdict == 'нет':
+            _group_stats['отсев:нет_в_прайсе'] += 1
+            short = ' '.join(text.split())[:80]
+            logger.info(f'Нет в прайсе ({", ".join(sorted(models))}) — ИИ не зовём: "{short}"')
             return
 
         try:

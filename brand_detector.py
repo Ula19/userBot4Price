@@ -390,13 +390,30 @@ def _has_apple_article(low, latin, had_device):
     return False
 
 
-def _brand_found(key, low, latin):
-    """Есть ли в тексте смартфон бренда key (с проверкой чужого бренда перед «голыми» номерами)."""
+def _mentions(key, low, latin):
+    """Упоминания смартфона бренда key: (вид, начало, конец). «Голые» номера с чужим брендом перед ними — пропускаем."""
     for kind, pattern, use_latin in _COMPILED[key]:
         for match in pattern.finditer(latin if use_latin else low):
             if kind != 'number' or not _foreign_before(low, latin, match.start(), key):
-                return True
-    return False
+                yield kind, match.start(), match.end()
+
+
+def _brand_found(key, low, latin):
+    """Есть ли в тексте смартфон бренда key."""
+    return next(_mentions(key, low, latin), None) is not None
+
+
+def iter_mentions(text, key):
+    """
+    Все упоминания смартфона бренда key в тексте (для проверки модели по прайсу):
+    (вид паттерна, начало, конец, очищенный текст) — позиции указывают в очищенный текст.
+    """
+    if key not in _COMPILED:
+        return
+    low, _ = _clean(text)
+    latin = low.translate(_TO_LATIN)
+    for kind, start, end in _mentions(key, low, latin):
+        yield kind, start, end, low
 
 
 def find_brand(text, brands):

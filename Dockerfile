@@ -17,6 +17,7 @@ COPY aliases.py .
 COPY examples.py .
 COPY group_rules.py .
 COPY brand_detector.py .
+COPY price_check.py .
 
 # запуск
 CMD ["python3", "bot.py"]
