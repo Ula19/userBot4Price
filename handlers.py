@@ -8,6 +8,7 @@ import logging
 from collections import Counter
 from datetime import datetime, timezone, timedelta
 from telethon import events, errors
+from telethon.tl.types import User
 import search
 import id_resolver
 import ai_parser
@@ -15,6 +16,10 @@ import group_rules
 import brand_detector
 
 logger = logging.getLogger(__name__)
+
+# имитация человека перед ответом (одинаково для SOURCE_BOT и групп): пауза + набор текста, секунды
+REPLY_DELAY = (10, 20)
+TYPING_TIME = (5, 10)
 
 # анти-спам кулдаун
 user_last_reply = {}
@@ -409,7 +414,7 @@ async def _group_stats_logger():
 
 
 def _group_test_mode():
-    """GROUP_TEST_MODE=1 в .env — локальный тест групп: без рабочих часов, сообщения ботов не пропускаем."""
+    """GROUP_TEST_MODE=1 в .env — локальный тест групп: без рабочих часов и с причиной отсева в логе."""
     return os.getenv('GROUP_TEST_MODE', '').strip().lower() in ('1', 'true', 'yes', 'да')
 
 
@@ -418,6 +423,65 @@ def _group_skip(reason, chat_id, test_mode):
     _group_stats[f'отсев:{reason}'] += 1
     if test_mode:
         logger.info(f'  [Группа/тест] {chat_id}: не отвечаем — {reason}')
+
+
+async def _send_group_dm(client, sender, who_label, response):
+    """
+    Ответ в ЛС с набором текста.
+    True — отправлено, False — флуд-бан (не отвечаем совсем), None — не вышло, пробуем reply в группе.
+    """
+    try:
+        typing_time = random.uniform(*TYPING_TIME)
+        logger.info(f'  Имитирую набор текста в ЛС {who_label} ({typing_time:.1f}с)...')
+        async with client.action(sender, 'typing'):
+            await asyncio.sleep(typing_time)
+        await client.send_message(sender, response)
+        logger.info(f'  Ответ отправлен в ЛС {who_label}')
+        return True
+    except errors.FloodWaitError as e:
+        if e.seconds > 300:
+            logger.error(f'  [Флуд] бан {e.seconds}с — пропускаем {who_label}')
+            _group_stats['ошибка:флуд'] += 1
+            return False
+        logger.warning(f'  [Флуд] ждём {e.seconds}с для {who_label}')
+        await asyncio.sleep(e.seconds + 2)
+        try:
+            await client.send_message(sender, response)
+            return True
+        except Exception as e2:
+            logger.warning(f'  [Группа] повтор ЛС не удался: {e2}')
+    except (errors.UserPrivacyRestrictedError, errors.UserIsBlockedError) as e:
+        logger.info(f'  [Группа] ЛС недоступно ({type(e).__name__}), fallback в группу')
+    except Exception as e:
+        logger.warning(f'  [Группа] ЛС не вышло ({type(e).__name__}: {e}), fallback в группу')
+    return None
+
+
+async def _send_group_reply(client, event, sender, who_label, response):
+    """
+    Отвечает на запрос из группы с короткой имитацией человека (как в режиме SOURCE_BOT).
+    Живому человеку — в ЛС; боту, каналу или если ЛС закрыто — reply в группе.
+    Возвращает True, если ответ ушёл.
+    """
+    delay = random.uniform(*REPLY_DELAY)
+    logger.info(f'  Жду {delay:.1f}с перед ответом {who_label}...')
+    await asyncio.sleep(delay)
+
+    # боту или каналу в ЛС писать бесполезно — их владелец ответ не увидит
+    if isinstance(sender, User) and not sender.bot:
+        sent = await _send_group_dm(client, sender, who_label, response)
+        if sent is not None:
+            return sent
+
+    try:
+        async with client.action(event.chat_id, 'typing'):
+            await asyncio.sleep(random.uniform(*TYPING_TIME))
+        await event.reply(response)
+        logger.info(f'  Ответ отправлен reply в группу {event.chat_id}')
+        return True
+    except Exception as e:
+        logger.error(f'  [Группа] reply не удался: {e}')
+        return False
 
 
 def register_group_handlers(client, group_chats, owner_id=None):
@@ -430,7 +494,7 @@ def register_group_handlers(client, group_chats, owner_id=None):
     _ensure_owner_flusher(client, owner_id)
     asyncio.create_task(_group_stats_logger())
     if _group_test_mode():
-        logger.warning('ТЕСТОВЫЙ РЕЖИМ ГРУПП (GROUP_TEST_MODE): без рабочих часов, отвечаем и ботам — на проде выключить!')
+        logger.warning('ТЕСТОВЫЙ РЕЖИМ ГРУПП (GROUP_TEST_MODE): без рабочих часов, причина отсева в логе — на проде выключить!')
 
     @client.on(events.NewMessage(chats=group_chats, incoming=True))
     async def on_group_message(event):
@@ -461,14 +525,10 @@ def register_group_handlers(client, group_chats, owner_id=None):
             sender = await event.get_sender()
         except Exception as e:
             logger.warning(f'  [Группа] get_sender: {e}')
-            return
+            sender = None
 
-        # боты — не покупатели (в тестовом режиме пропускаем, чтобы слать запросы через test_group_send.py)
-        if sender is None or (getattr(sender, 'bot', False) and not test_mode):
-            _group_skip('бот', event.chat_id, test_mode)
-            return
-
-        sender_id = sender.id
+        # отвечаем всем: людям, ботам, каналам и анонимным отправителям
+        sender_id = getattr(sender, 'id', None) or event.sender_id or event.chat_id
         username = getattr(sender, 'username', None)
         who_label = f'@{username}' if username else f'id:{sender_id}'
 
@@ -498,49 +558,8 @@ def register_group_handlers(client, group_chats, owner_id=None):
 
         if all_found:
             response = format_response(all_found)
-
-            delay = random.uniform(20, 50)
-            logger.info(f'  Жду {delay:.1f}с перед ответом {who_label}...')
-            await asyncio.sleep(delay)
-
-            sent_to_dm = False
-            try:
-                typing_time = random.uniform(10, 20)
-                logger.info(f'  Имитирую набор текста в ЛС {who_label} ({typing_time:.1f}с)...')
-                async with client.action(sender, 'typing'):
-                    await asyncio.sleep(typing_time)
-                await client.send_message(sender, response)
-                sent_to_dm = True
-                logger.info(f'  Ответ отправлен в ЛС {who_label}')
-            except errors.FloodWaitError as e:
-                if e.seconds > 300:
-                    logger.error(f'  [Флуд] бан {e.seconds}с — пропускаем {who_label}')
-                    _group_stats['ошибка:флуд'] += 1
-                    return
-                logger.warning(f'  [Флуд] ждём {e.seconds}с для {who_label}')
-                await asyncio.sleep(e.seconds + 2)
-                try:
-                    await client.send_message(sender, response)
-                    sent_to_dm = True
-                except Exception as e2:
-                    logger.warning(f'  [Группа] повтор ЛС не удался: {e2}')
-            except (errors.UserPrivacyRestrictedError, errors.UserIsBlockedError) as e:
-                logger.info(f'  [Группа] ЛС недоступно ({type(e).__name__}), fallback в группу')
-            except Exception as e:
-                logger.warning(f'  [Группа] ЛС не вышло ({type(e).__name__}: {e}), fallback в группу')
-
-            if sent_to_dm:
+            if await _send_group_reply(client, event, sender, who_label, response):
                 _group_stats['ответов'] += 1
-            else:
-                try:
-                    typing_time = random.uniform(5, 10)
-                    async with client.action(event.chat_id, 'typing'):
-                        await asyncio.sleep(typing_time)
-                    await event.reply(response)
-                    _group_stats['ответов'] += 1
-                    logger.info(f'  Ответ отправлен reply в группу {event.chat_id}')
-                except Exception as e:
-                    logger.error(f'  [Группа] reply не удался: {e}')
         else:
             logger.info('  [Группа] ничего не найдено, не отвечаем')
 
@@ -620,7 +639,7 @@ def register_handlers(client, source_bot, owner_username=None):
 
                 # Имитируем человека: ждём случайное время перед ответом
                 # Моментальный ответ — частая причина спам-бана
-                delay = random.uniform(10, 20)
+                delay = random.uniform(*REPLY_DELAY)
                 logger.info(f'  Жду {delay:.1f}с перед ответом @{username} (анти-спам)...')
                 await asyncio.sleep(delay)
 
@@ -636,7 +655,7 @@ def register_handlers(client, source_bot, owner_username=None):
                 recipient = user_id
 
                 try:
-                    typing_time = random.uniform(5, 10)
+                    typing_time = random.uniform(*TYPING_TIME)
                     logger.info(f'  Имитирую набор текста для @{username} ({typing_time:.1f}с)...')
                     async with client.action(recipient, 'typing'):
                         await asyncio.sleep(typing_time)
