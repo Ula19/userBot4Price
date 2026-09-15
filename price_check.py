@@ -55,20 +55,25 @@ def _norm(text):
 # kind — вид паттерна brand_detector: brand (название бренда), model, number (номер/код)
 # span — сам найденный текст, after — текст сразу после него (для «Samsung A56», «Redmi 15»)
 
+# «16e», «16 e», «16 е» — но не «17 e-sim», «16 есим»
+_IPHONE_E = r'(?:[^\S\n]?(e)(?![a-z])(?![^\S\n]?-?[sc][iи]m))?'
+
+
 def _iphone_family(kind, span, after):
     if kind == 'brand':
-        m = re.match(r'[^\S\n]*(?:pro[\s-]?max|pro)?[^\S\n]*(air|1[1-9](?:e(?![a-z]))?)(?!\d)', _norm(after))
-        tail = m.group(1) if m else None
+        m = re.match(rf'[^\S\n]*(?:pro[\s-]?max|pro)?[^\S\n]*(?:(air)|(1[1-9]){_IPHONE_E})(?!\d)', _norm(after))
+        if m:
+            return m.group(1) or m.group(2) + (m.group(3) or '')
         # "ip 17", "эпл 16" — номер уже внутри найденного
-        m2 = re.search(r'(?<!\d)(1[1-9])(e(?![a-z]))?(?!\d)', _norm(span))
-        return tail or (m2.group(1) + (m2.group(2) or '') if m2 else None)
-    t = _norm(span)
-    if re.search(r'(?<![a-z])air', t):
+        m = re.search(rf'(?<!\d)(1[1-9]){_IPHONE_E}(?!\d)', _norm(span))
+        return m.group(1) + (m.group(2) or '') if m else None
+    if re.search(r'(?<![a-z])air', _norm(span)):
         return 'air'
-    m = re.search(r'(?<!\d)(1[1-9])(e(?![a-z]))?(?:(?!\d)|(?=128|256|512))', t)
+    t = _norm(span + after[:5])   # хвост нужен, чтобы увидеть «e sim» после «17 e»
+    m = re.search(rf'(?<!\d)(1[1-9]){_IPHONE_E}(?:(?!\d)|(?=128|256|512))', t)
     if m:
         return m.group(1) + (m.group(2) or '')
-    m = re.search(r'(?<![a-z])(xr|xs|se)(?![a-z])', t)
+    m = re.search(r'(?<![a-z])(xr|xs|se)(?![a-z])', _norm(span))
     return m.group(1) if m else None
 
 
@@ -81,13 +86,16 @@ def _samsung_code(t):
     m = re.search(r'(?<![a-z0-9])([asc])\s?-?(\d{2})(?!\d)', t)
     if m:
         return ('a' if m.group(1) == 'a' else 's') + m.group(2)
+    m = re.search(r'(?<![a-z0-9])a(\d{2})\d(?!\d)', t)       # «A566», «A566B» → a56
+    if m:
+        return 'a' + m.group(1)
     m = re.search(r'(?<![\w])(2[2-6])\s?ultra', t)
     return 's' + m.group(1) if m else None
 
 
 def _samsung_family(kind, span, after):
     if kind == 'brand':
-        m = re.match(r'[^\S\n]*(?:samsung[^\S\n]*)?((?:z\s?)?(?:fold|flip)\s?\d(?!\d)|[asc]\s?\d{2}(?!\d))', _norm(after))
+        m = re.match(r'[^\S\n]*(?:samsung[^\S\n]*)?((?:z\s?)?(?:fold|flip)\s?\d(?!\d)|a\d{3}(?!\d)|[asc]\s?\d{2}(?!\d))', _norm(after))
         return _samsung_code(m.group(1)) if m else None
     return _samsung_code(_norm(span + after[:4]))
 
@@ -117,13 +125,15 @@ def _xiaomi_code(t):
     m = re.search(r'note\s?(\d{1,2})(?!\d)', t)
     if m:
         return f'redmi note {m.group(1)}'
-    m = re.search(r'redmi\s?(a\s?\d{1,2}|\d{1,2}[a-z]?)(?![a-z0-9])', t)
+    if re.search(r'redmi\s?\d{1,2}\sc\s*\d{1,2}\s?/', t):
+        return None                                   # «редми 15 с 4/128»: C или «с памятью» — не угадываем
+    m = re.search(r'redmi\s?(a\s?\d{1,2}|\d{1,2}(?:[a-z]|\sc(?=\s*(?:$|[,.!?)\n])))?)(?![a-z0-9])', t)
     if m:
         return 'redmi ' + m.group(1).replace(' ', '')
-    m = re.search(r'(?:xiaomi|(?<![a-z])mi)\s?(\d{1,2})(t)?(?![0-9])', t)
+    m = re.search(r'(?:xiaomi|(?<![a-z])mi)\s?(\d{1,2})(?:\s?(t)(?![a-z.]))?(?![0-9])', t)
     if m:
         return f'mi {m.group(1)}{m.group(2) or ""}'
-    m = re.search(r'(?<!\d)(1[3-5])t(?![a-z])', t)
+    m = re.search(r'(?<!\d)(1[3-5])\s?t(?![a-z.])', t)
     return f'mi {m.group(1)}t' if m else None
 
 
@@ -187,6 +197,9 @@ def _price_index():
         families, unclear = set(), []
         for product in products:
             found, unsure = model_families(product['name'], key)
+            if not found and not unsure and key in ('samsung', 'honor'):
+                # «Flip7 12/256», «400 8/256» — в прайсе без бренда: пробуем с названием бренда
+                found = model_families(f'{key} {product["name"]}', key)[0]
             families |= found
             if unsure and not found:
                 unclear.append(product['name'])
@@ -219,6 +232,9 @@ def check(text, brands):
         families, unsure = model_families(text, key)
         if unsure or (families and index.get(key) is None):
             return 'не_уверен', families
+        if key == 'honor' and any('magicv' + f[5:] in index[key] for f in families
+                                  if f.startswith('magic') and not f.startswith('magicv')):
+            return 'не_уверен', families          # «Мэджик 5» при Magic V5 в прайсе — скорее всего V5
         in_price = families & index[key]
         if in_price:
             return 'есть', in_price
