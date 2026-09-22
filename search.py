@@ -49,29 +49,79 @@ IPHONE_COLOR_MAP = {
 }
 
 
+# мусорные префиксы в названиях: "Смартфон Samsung Galaxy A27..." → "A27..."
+_JUNK_PREFIX = re.compile(r'^(?:смартфон|телефон|тел\.|phone)\s+', re.IGNORECASE)
+
+# бренд-префиксы Android: убираем, чтобы прайс и запрос сравнивались одинаково
+_BRAND_PREFIX = re.compile(r'^(?:samsung|galaxy|xiaomi|сяоми|poco|honor)\s+', re.IGNORECASE)
+
+# заводской код в конце: "(A276B)", "(SM-A566B)" — в скобках есть цифра и нет пробела
+_FACTORY_CODE = re.compile(r'\s*\((?=[^)]*\d)([\w-]+)\)\s*$')
+
+# реальные объёмы Storage — чтобы "S25+ 12/256" не склеилось в "25/12"
+_STORAGE = r'(?:16|32|64|128|256|512|1024|2048)'
+
+# память со слешем или плюсом: "8/256", "8/256GB", "8 + 256", "8gb/256gb"
+_MEMORY_SLASH = re.compile(
+    rf'(?<!\d)(\d{{1,2}})(?:\s*(?:gb|гб))?\s*[/+]\s*({_STORAGE})(?:\s*(?:gb|гб|tb|тб))?(?!\w)',
+    re.IGNORECASE
+)
+# память через пробел — только когда единицы написаны явно: "8Gb 256Gb"
+# (иначе "A37 128 черный" склеится в память "37/128")
+_MEMORY_GB = re.compile(
+    rf'(?<!\d)(\d{{1,2}})\s*(?:gb|гб)\s+({_STORAGE})\s*(?:gb|гб|tb|тб)(?!\w)',
+    re.IGNORECASE
+)
+
+
+def _prepare_android(name: str) -> str:
+    """
+    Приводит название Android-товара (из прайса или от ИИ) к одному виду:
+    "Смартфон Samsung Galaxy A27 5G 8/256GB Black (A276B)" → "a27 5g 8/256 black"
+    "Xiaomi Redmi Note 17 Pro Max 5G 8Gb 256Gb (Cloud Blush)" → "redmi note 17 pro max 5g 8/256 cloud blush"
+    """
+    n = _JUNK_PREFIX.sub('', name.strip())
+    n = _FACTORY_CODE.sub('', n)              # убираем заводской код в конце
+    n = _BRAND_PREFIX.sub('', n)              # Samsung/Galaxy/Xiaomi — только в начале
+    n = _BRAND_PREFIX.sub('', n)              # "Samsung Galaxy A27" — два префикса подряд
+    n = n.replace('(', ' ').replace(')', ' ')  # цвет в скобках: "(Cloud Blush)" → "cloud blush"
+    # память к виду 8/256 (в любом написании)
+    slash = lambda m: f'{m.group(1)}/{m.group(2)}'
+    n = _MEMORY_GB.sub(slash, n)
+    n = _MEMORY_SLASH.sub(slash, n)
+    return ' '.join(n.lower().split())
+
+
 # синонимы цветов для Android-телефонов (Samsung/Honor): приводим к одному виду
 # grey/gray — одно и то же; фиолетовый ИИ может вернуть как Purple, в прайсе Light Violet
 _ANDROID_COLOR_SYNONYMS = {
     'grey': 'gray',
     'purple': 'violet',
     'lavender': 'violet',
+    'lavanda': 'violet',
+    'лаванда': 'violet',
 }
 
 
 def _norm_android_color(color: str) -> str:
-    """Нормализует цвет: grey→gray, purple→violet. Иначе как есть (lowercase)."""
-    c = color.lower().strip()
+    """Нормализует цвет: grey→gray, purple→violet, lavanda→violet. Иначе как есть (lowercase)."""
+    c = ' '.join(color.lower().split())
     return _ANDROID_COLOR_SYNONYMS.get(c, c)
 
 
 def _android_color_match(q_color: str, p_color: str) -> bool:
     """
     Сравнивает цвета Android-телефона с учётом синонимов и составных названий.
-    'purple' ↔ 'Light Violet' (endswith), 'grey' ↔ 'Gray', 'blue' ↔ 'Ocean Blue'.
+    'purple' ↔ 'Light Violet' (endswith), 'grey' ↔ 'Gray', 'blue' ↔ 'Ocean Blue',
+    'Gray Green' ↔ 'GrayGreen' (в прайсе пишут слитно).
     """
     q = _norm_android_color(q_color)
     p = _norm_android_color(p_color)
-    return q == p or p.endswith(q)
+    if q == p or p.endswith(q):
+        return True
+    # в прайсе составной цвет могут написать слитно: "GrayGreen", "Cloudblush"
+    q_tight, p_tight = q.replace(' ', ''), p.replace(' ', '')
+    return q_tight == p_tight or p_tight.endswith(q_tight)
 
 
 def _normalize_airpods(text: str) -> str:
@@ -86,11 +136,13 @@ def _is_airpods(text: str) -> bool:
 
 def _detect_category(model: str) -> str:
     """Определяет категорию товара по полю model из AI-ответа."""
-    m = model.lower().strip()
+    m = _JUNK_PREFIX.sub('', model.lower().strip())
     if _is_airpods(m):                                   return 'airpods'
     if 'dualsense' in m:                                return 'dualsense'
     if m.startswith('dyson'):                           return 'dyson'
-    if m.startswith('redmi') or m.startswith('xiaomi'):  return 'redmi'
+    if re.match(r'^(?:redmi|xiaomi|poco)\b', m) or 'redmi' in m:  return 'redmi'
+    # "Note 17 Pro" без бренда — это Redmi Note
+    if re.match(r'^note\s?\d', m):                      return 'redmi'
     if m.startswith('macbook'):                          return 'macbook'
     # Яндекс Станция / Алиса — товар на русском
     if 'яндекс' in m or 'станци' in m or 'алиса' in m:  return 'yandex'
@@ -109,11 +161,12 @@ def _detect_category(model: str) -> str:
 
 def _detect_product_category(name: str) -> str:
     """Определяет категорию товара из прайса по его названию."""
-    n = name.lower().strip()
+    n = _JUNK_PREFIX.sub('', name.lower().strip())
     if _is_airpods(n):                                   return 'airpods'
     if 'dualsense' in n:                                return 'dualsense'
     if n.startswith('dyson'):                           return 'dyson'
-    if n.startswith('redmi') or n.startswith('xiaomi'):  return 'redmi'
+    # "Xiaomi Redmi Note 17...", "Poco X7 Pro..." — бренд может стоять не первым словом
+    if re.match(r'^(?:redmi|xiaomi|poco)\b', n) or 'redmi' in n:  return 'redmi'
     if n.startswith('macbook'):                          return 'macbook'
     # Яндекс Станция / Алиса
     if n.startswith('яндекс') or 'станци' in n:         return 'yandex'
@@ -123,7 +176,7 @@ def _detect_product_category(name: str) -> str:
     if re.match(r'^[as]\d', n) or n.startswith('galaxy') or n.startswith('samsung'):
         return 'samsung'
     if re.match(r'^\d', n):                             return 'iphone'
-    if 'адаптер' in n:                                  return 'adapter'
+    if 'адаптер' in n or 'adapter' in n:                 return 'adapter'
     return 'generic'
 
 
@@ -218,14 +271,15 @@ def _parse_samsung_product(name):
     """
     Парсит название Samsung из прайса.
     'A36 8/256 Lime'          → {model:'a36', sub:None, memory:'8/256', color:'lime'}
+    'Смартфон Samsung Galaxy A27 5G 8/256GB Black (A276B)' → {model:'a27', sub:'5g', memory:'8/256', color:'black'}
     'A26 5G 6/128 Black'      → {model:'a26', sub:'5g', memory:'6/128', color:'black'}
     'S25 Ultra 12/512 Black'  → {model:'s25', sub:'ultra', memory:'12/512', color:'black'}
     'S25+ 12/256 Blue'        → {model:'s25+', sub:None, memory:'12/256', color:'blue'}
     """
-    # новый прайс пишет с префиксом "Samsung A56...", старый — голое "A56..."
-    name = re.sub(r'^(samsung|galaxy)\s+', '', name, flags=re.IGNORECASE)
+    # "Смартфон Samsung Galaxy A27 5G 8/256GB Black (A276B)" → "a27 5g 8/256 black"
+    name = _prepare_android(name)
     match = re.match(
-        r'^([AS]\d+\+?)\s*(5G|Ultra)?\s*(\d+/\d+)\s+(.+)$',
+        r'^([as]\d+\+?)\s*(5g|ultra|plus|fe|edge)?\s*(\d{1,2}/\d{2,4})\s+(.+)$',
         name, re.IGNORECASE
     )
     if not match:
@@ -238,19 +292,31 @@ def _parse_samsung_product(name):
     }
 
 
+def _norm_redmi_model(model: str) -> str:
+    """
+    Приводит модель Redmi/Xiaomi/Poco к одному виду, чтобы прайс и запрос совпадали:
+    'Xiaomi Redmi Note 17 Pro' → 'note 17 pro', 'Redmi 15' → '15', 'Xiaomi 15T Pro' → '15t pro'
+    """
+    m = _prepare_android(model)
+    m = re.sub(r'^redmi\s+', '', m)          # с 'Redmi' и без него — одна модель
+    m = re.sub(r'\s*\b5g\b', '', m)          # 5G — не отдельная модель
+    return ' '.join(m.split())
+
+
 def _parse_redmi_product(name):
     """
-    Парсит название Redmi из прайса.
-    'Redmi 15 6/128GB Midnight Black' → {model:'redmi 15', memory:'6/128', color:'midnight black'}
+    Парсит название Redmi/Xiaomi/Poco из прайса. Модель = всё между брендом и памятью.
+    'Redmi 15 6/128GB Midnight Black' → {model:'15', memory:'6/128', color:'midnight black'}
+    'Xiaomi Redmi Note 17 Pro Max 5G 8Gb 256Gb (Cloud Blush)' → {model:'note 17 pro max', memory:'8/256', color:'cloud blush'}
     """
     match = re.match(
-        r'^(Redmi\s+\S+)\s+(\d+/\d+)(?:GB)?\s+(.+)$',
-        name, re.IGNORECASE
+        r'^(.+?)\s+(\d{1,2}/\d{2,4})\s+(.+)$',
+        _prepare_android(name), re.IGNORECASE
     )
     if not match:
         return None
     return {
-        'model': match.group(1).lower(),
+        'model': _norm_redmi_model(match.group(1)),
         'memory': match.group(2),
         'color': match.group(3).strip().lower(),
     }
@@ -264,8 +330,8 @@ def _parse_honor_product(name):
     модель = всё между 'Honor' и памятью (ловит и 'X8D', и '600 Lite').
     """
     match = re.match(
-        r'^Honor\s+(.+?)\s+(\d+/\d+)\s+(.+)$',
-        name, re.IGNORECASE
+        r'^(?:honor\s+)?(.+?)\s+(\d{1,2}/\d{2,4})\s+(.+)$',
+        _prepare_android(name), re.IGNORECASE
     )
     if not match:
         return None
@@ -330,9 +396,8 @@ def _search_samsung(item):
     """Поиск Samsung A/S-серии по нормализованным полям."""
     products = price_parser.get_all_products()
 
-    q_model_raw = item['model'].lower()
-    # Убираем префиксы Galaxy/Samsung если есть
-    q_model_raw = re.sub(r'^(galaxy|samsung)\s*', '', q_model_raw).strip()
+    # "Смартфон Samsung Galaxy A27 5G" → "a27 5g"
+    q_model_raw = _prepare_android(item['model'])
     # Извлекаем базовую модель (A36, S25, S25+) и суффикс (5G, Ultra)
     q_base_match = re.match(r'^([as]\d+\+?)', q_model_raw)
     q_base = q_base_match.group(1) if q_base_match else q_model_raw
@@ -386,7 +451,7 @@ def _search_honor(item):
     products = price_parser.get_all_products()
 
     # модель из AI: "Honor X8D" / "Honor 600 Lite" → срезаем префикс honor
-    q_model = re.sub(r'^honor\s+', '', item['model'].lower().strip()).strip()
+    q_model = _prepare_android(item['model'])
     q_memory = item.get('memory')
     q_color = item.get('color', '').lower() if item.get('color') else None
 
@@ -461,7 +526,7 @@ def _search_redmi(item):
     """Поиск Redmi/Xiaomi по нормализованным полям."""
     products = price_parser.get_all_products()
 
-    q_model = item['model'].lower()
+    q_model = _norm_redmi_model(item['model'])
     q_memory = item.get('memory')
     q_color = item.get('color', '').lower() if item.get('color') else None
 
@@ -489,11 +554,10 @@ def _search_redmi(item):
                     similar.append({**product, '_reason': f'память: просили {q_memory}, есть {p_mem}'})
                     continue
 
-        # ФИЛЬТР 3: Цвет
+        # ФИЛЬТР 3: Цвет (с учётом синонимов и слитного написания: "Gray Green" ≡ "GrayGreen")
         if q_color is not None:
-            p_color = parsed['color']
-            if q_color != p_color and not p_color.endswith(q_color):
-                similar.append({**product, '_reason': f'цвет: просили {q_color}, есть {p_color}'})
+            if not _android_color_match(q_color, parsed['color']):
+                similar.append({**product, '_reason': f'цвет: просили {q_color}, есть {parsed["color"]}'})
                 continue
 
         exact.append(product)
