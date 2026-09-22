@@ -91,6 +91,7 @@ SIM-СЛОТ:
 - Заводской код в скобках — НЕ цвет, выбрось его: "A27 5G 8/256GB Black (A276B)" → color:"Black"
   Но название цвета в скобках — это цвет: "8Gb 256Gb (Cloud Blush)" → color:"Cloud Blush"
 - Samsung A-серия: любая "A07", "A17", "A27", "A36", "A37", "A56" — это Galaxy, НЕ iPhone и НЕ Apple chip
+- Redmi и Xiaomi — ОДИН бренд: "Xiaomi Note 17" = "Redmi Note 17", "Xiaomi 15" = "Redmi 15"
 - Redmi/Xiaomi: ОБЯЗАТЕЛЬНО сохраняй "Note" и "Pro"/"Pro Max" — это разные телефоны:
     "redmi note 17 pro max 8/512" → "Redmi Note 17 Pro Max"
     "Xiaomi Redmi Note 17 Pro 8/256" → "Redmi Note 17 Pro"
