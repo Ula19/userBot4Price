@@ -240,7 +240,8 @@ async def normalize_queries(text: str):
         )
 
         content = response.choices[0].message.content.strip()
-        if response.choices[0].finish_reason == 'length':
+        # finish_reason может отсутствовать (прокси, нестандартный ответ) — не роняем разбор
+        if getattr(response.choices[0], 'finish_reason', None) == 'length':
             logger.error('  [ИИ] Ответ обрезан по лимиту токенов — беру то, что успело прийти')
 
         usage = response.usage
