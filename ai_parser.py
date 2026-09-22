@@ -274,7 +274,8 @@ async def normalize_queries(text: str):
         )
 
         content = response.choices[0].message.content.strip()
-        if response.choices[0].finish_reason == 'length':
+        truncated = getattr(response.choices[0], 'finish_reason', None) == 'length'
+        if truncated:
             logger.error('  [ИИ] Ответ обрезан по лимиту токенов — беру то, что успело прийти')
 
         usage = response.usage
@@ -307,7 +308,8 @@ async def normalize_queries(text: str):
             q = build_search_query(item)
             logger.info(f'    → "{q}" | sim={item.get("sim")}')
 
-        _cache_put(text, result)
+        if not truncated:
+            _cache_put(text, result)   # обрезанный ответ неполный — кешировать нельзя
         return [dict(item) for item in result]
 
     except json.JSONDecodeError as e:
