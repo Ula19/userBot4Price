@@ -132,6 +132,8 @@ SMARTPHONE_BRANDS = {
             ('brand', r'(?<!\w)(?:poco|поко)(?:\s?[xfmcхфмс]\d|фон|phone|(?![а-яa-z]))', False),
             ('brand', r'xiaomi|redmi|(?<!\w)poco\s?[xfmc]\d', True),
             ('number', r'(?<!\w)(?:mi|ми)\s?1[0-5](?:t|т|\s?(?:pro|про|ultra|ультра|lite|лайт))(?![а-яa-z])', False),
+            # "Mi 15 8/256" — без суффикса, но с памятью (иначе ловит "ми 15 минут")
+            ('number', r'(?<!\w)(?:mi|ми)\s?1[0-5]\s?\d{1,2}\s?/\s?\d{2,4}(?!\d)', False),
             ('number', r'(?<!\w)(?:note|ноут)\s?1[2-5]\s?(?:s|с|pro|про)?\s?(?:\+|plus|плюс|5g)(?![а-яa-z])', False),
             ('number', r'(?<![\w:./])1[3-5]t\s?(?:pro|ultra)(?![а-яa-z])', False),
         ],

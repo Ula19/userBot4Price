@@ -13,6 +13,7 @@
        'не_уверен' — модель не распознали (только бренд, странное написание) → в ИИ, как раньше
 
 семейство = модель без памяти/цвета/версии: «S25 Ultra 12/512» → s25, «17 Pro Max 256» → 17
+Redmi и Xiaomi — один бренд: «Xiaomi 15» и «Redmi 15» дают одно семейство
 проверяем только iPhone, Samsung, Honor, Xiaomi; остальные бренды — всегда в ИИ
 """
 import re
@@ -28,6 +29,7 @@ _WORD_FIXES = [(re.compile(p), r) for p, r in [
     (r'ноут', 'note'),
     (r'(?<!\w)поко', 'poco'),
     (r'сяом\w*|ксиа?оми|ксяоми|сиоми|ш[аи]оми|хиаоми', 'xiaomi'),
+    (r'\bми\b(?=\s?\d)', 'mi'),
     (r'(?<!\w)ми(?=\s?\d)', 'mi'),
     (r'хонор|хнор|хонр|хонер', 'honor'),
     (r'икс[\s-]?', 'x'),
@@ -119,22 +121,29 @@ def _honor_family(kind, span, after):
 
 
 def _xiaomi_code(t):
+    """
+    Семейство Xiaomi/Redmi/Poco/Mi. Redmi ≡ Xiaomi ≡ Mi — один бренд:
+    "Redmi 15", "Xiaomi 15", "Mi 15" → 'redmi 15'; "Redmi 15C" → 'redmi 15c' (другая модель)
+    """
+    brand = r'(?:redmi|xiaomi|(?<![a-z])mi)'
     m = re.search(r'poco\s?([xfmc])\s?(\d{1,2})(?!\d)', t)
     if m:
         return f'poco {m.group(1)}{m.group(2)}'
     m = re.search(r'note\s?(\d{1,2})(?!\d)', t)
     if m:
         return f'redmi note {m.group(1)}'
-    if re.search(r'redmi\s?\d{1,2}\sc\s*\d{1,2}\s?/', t):
+    if re.search(rf'{brand}\s?\d{{1,2}}\sc\s*\d{{1,2}}\s?/', t):
         return None                                   # «редми 15 с 4/128»: C или «с памятью» — не угадываем
-    m = re.search(r'redmi\s?(a\s?\d{1,2}|\d{1,2}(?:[a-z]|\sc(?=\s*(?:$|[,.!?)\n])))?)(?![a-z0-9])', t)
+    # буква после номера — отдельная модель: A5, 15C, 15T
+    m = re.search(
+        rf'{brand}\s?(a\s?\d{{1,2}}|\d{{1,2}}(?:\s?t(?![a-z.])|[a-z]|\sc(?=\s*(?:$|[,.!?)\n]))))(?![a-z0-9])', t)
     if m:
         return 'redmi ' + m.group(1).replace(' ', '')
-    m = re.search(r'(?:xiaomi|(?<![a-z])mi)\s?(\d{1,2})(?:\s?(t)(?![a-z.]))?(?![0-9])', t)
+    m = re.search(rf'{brand}\s?(\d{{1,2}})(?![a-z0-9])', t)
     if m:
-        return f'mi {m.group(1)}{m.group(2) or ""}'
+        return f'redmi {m.group(1)}'
     m = re.search(r'(?<!\d)(1[3-5])\s?t(?![a-z.])', t)
-    return f'mi {m.group(1)}t' if m else None
+    return f'redmi {m.group(1)}t' if m else None
 
 
 def _xiaomi_family(kind, span, after):
