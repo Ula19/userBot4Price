@@ -92,6 +92,24 @@ def _prepare_android(name: str) -> str:
     return ' '.join(n.lower().split())
 
 
+# Redmi, Xiaomi, Poco, Mi — для покупателей один бренд: "Xiaomi 15" == "Redmi 15"
+_XIAOMI_WORDS = re.compile(
+    r'\b(?:xiaomi|redmi|poco|сяоми|ксиа?оми|шаоми|хиаоми|редми|поко|mi|ми)\b',
+    re.IGNORECASE
+)
+# русские слова в модели — на случай, если ИИ не перевёл ("сяоми ноут 17 про")
+_RU_MODEL_WORDS = [(re.compile(rf'\b{ru}\b', re.IGNORECASE), en) for ru, en in [
+    ('ноут', 'note'), ('нот', 'note'), ('про', 'pro'), ('макс', 'max'),
+    ('ультра', 'ultra'), ('лайт', 'lite'), ('плюс', 'plus'),
+]]
+
+# бренд Xiaomi в названии: слово бренда или "Mi 15" (Mi только с номером — иначе ловит "ми" в тексте)
+_XIAOMI_BRAND = re.compile(
+    r'\b(?:xiaomi|redmi|poco|сяоми|ксиа?оми|шаоми|хиаоми|редми|поко)\b|\b(?:mi|ми)\s?\d',
+    re.IGNORECASE
+)
+
+
 # синонимы цветов для Android-телефонов (Samsung/Honor): приводим к одному виду
 # grey/gray — одно и то же; фиолетовый ИИ может вернуть как Purple, в прайсе Light Violet
 _ANDROID_COLOR_SYNONYMS = {
@@ -140,7 +158,7 @@ def _detect_category(model: str) -> str:
     if _is_airpods(m):                                   return 'airpods'
     if 'dualsense' in m:                                return 'dualsense'
     if m.startswith('dyson'):                           return 'dyson'
-    if re.match(r'^(?:redmi|xiaomi|poco)\b', m) or 'redmi' in m:  return 'redmi'
+    if _XIAOMI_BRAND.search(m):                          return 'redmi'
     # "Note 17 Pro" без бренда — это Redmi Note
     if re.match(r'^note\s?\d', m):                      return 'redmi'
     if m.startswith('macbook'):                          return 'macbook'
@@ -165,8 +183,8 @@ def _detect_product_category(name: str) -> str:
     if _is_airpods(n):                                   return 'airpods'
     if 'dualsense' in n:                                return 'dualsense'
     if n.startswith('dyson'):                           return 'dyson'
-    # "Xiaomi Redmi Note 17...", "Poco X7 Pro..." — бренд может стоять не первым словом
-    if re.match(r'^(?:redmi|xiaomi|poco)\b', n) or 'redmi' in n:  return 'redmi'
+    # "Xiaomi Redmi Note 17...", "Poco X7 Pro...", "Mi 15" — бренд может стоять не первым словом
+    if _XIAOMI_BRAND.search(n):                          return 'redmi'
     if n.startswith('macbook'):                          return 'macbook'
     # Яндекс Станция / Алиса
     if n.startswith('яндекс') or 'станци' in n:         return 'yandex'
@@ -294,12 +312,16 @@ def _parse_samsung_product(name):
 
 def _norm_redmi_model(model: str) -> str:
     """
-    Приводит модель Redmi/Xiaomi/Poco к одному виду, чтобы прайс и запрос совпадали:
-    'Xiaomi Redmi Note 17 Pro' → 'note 17 pro', 'Redmi 15' → '15', 'Xiaomi 15T Pro' → '15t pro'
+    Приводит модель Redmi/Xiaomi/Poco/Mi к одному виду, чтобы прайс и запрос совпадали.
+    Бренд не важен — для покупателей Redmi и Xiaomi одно и то же:
+    'Xiaomi Redmi Note 17 Pro' и 'Redmi Note 17 Pro' → 'note 17 pro'
+    'Redmi 15', 'Xiaomi 15', 'Mi 15' → '15'
     """
     m = _prepare_android(model)
-    m = re.sub(r'^redmi\s+', '', m)          # с 'Redmi' и без него — одна модель
+    m = _XIAOMI_WORDS.sub(' ', m)            # Redmi / Xiaomi / Poco / Mi — один бренд
     m = re.sub(r'\s*\b5g\b', '', m)          # 5G — не отдельная модель
+    for pattern, en in _RU_MODEL_WORDS:      # "ноут 17 про" → "note 17 pro"
+        m = pattern.sub(en, m)
     return ' '.join(m.split())
 
 
