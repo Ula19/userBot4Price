@@ -6,6 +6,7 @@
 Python (search.py) сам ищет товары по этим полям — без прайса в промпте.
 """
 import os
+import re
 import json
 import time
 import logging
@@ -110,8 +111,18 @@ SIM-СЛОТ:
   Пример: "Dyson HS08 и A07 4/128" → [{"model":"Dyson HS08"...}, {"model":"A07"...}]  (A07 это Samsung, НЕ "Dyson A07")
 - iPhone: ОБЯЗАТЕЛЬНО сохраняй номер поколения. "17 Pro Max" → model:"17 Pro Max", НЕ "Pro Max"
 - Исправляй опечатки: "прошечка"→"17 Pro", "макс"→"Pro Max", "мах"→"Pro Max", "пм"→"Pro Max"
-- Игнорируй: приветствия, вопросы ("есть?", "почём?", "привет брат", "куплю")
-- Samsung A-серия: "A17", "A36", "A55" — это Galaxy, НЕ iPhone и НЕ Apple chip
+- КАЖДАЯ строка и КАЖДАЯ позиция — отдельный объект. Позиций может быть 30 — верни ВСЕ, ничего не пропускай
+- Игнорируй: приветствия, вопросы ("есть?", "почём?", "привет брат", "куплю"),
+  слова "Предложите", "Смартфон", "Телефон", количество в конце ("A37 128 черный 2" → количество 2 НЕ цвет и НЕ память)
+- Заводской код в скобках — НЕ цвет, выбрось его: "A27 5G 8/256GB Black (A276B)" → color:"Black"
+  Но название цвета в скобках — это цвет: "8Gb 256Gb (Cloud Blush)" → color:"Cloud Blush"
+- Samsung A-серия: любая "A07", "A17", "A27", "A36", "A37", "A56" — это Galaxy, НЕ iPhone и НЕ Apple chip
+- Redmi/Xiaomi: ОБЯЗАТЕЛЬНО сохраняй "Note" и "Pro"/"Pro Max" — это разные телефоны:
+    "redmi note 17 pro max 8/512" → "Redmi Note 17 Pro Max"
+    "Xiaomi Redmi Note 17 Pro 8/256" → "Redmi Note 17 Pro"
+    "Redmi Note 17 4/128" → "Redmi Note 17"
+    "Redmi 17 4/128" → "Redmi 17"   (без Note — другая модель!)
+  "5G" в модель НЕ добавляй
 - Dyson: "дайсон в12" → "Dyson V12s"
 - Адаптер: всегда включай мощность → "Apple 20W Adapter"
 - AirPods (наушники Apple):
@@ -168,6 +179,8 @@ SIM-СЛОТ:
 - iPhone: только Storage → "17 Pro 256" → memory:"256"
 - Терабайт: "1тб"/"1 терабайт"/"терабайт"/"1tb"/"1024" → memory:"1TB"; "2тб"/"2 терабайта" → "2TB". Просто "терабайт" без числа → "1TB"
 - Android/Samsung/Xiaomi/Redmi: RAM/Storage → "A36 8/256" → memory:"8/256"
+- Любое написание памяти сводй к RAM/Storage: "8Gb 256Gb" / "8/256GB" / "8 + 256" / "8gb/256gb" → "8/256"
+- Одно число у Android — это Storage: "A37 128 черный" → memory:"128"
 - Исправляй очевидные опечатки: 257→256, 513→512
 - КРИТИЧНО: "8/256" принадлежит строго своему товару.
   Если запрос "A36 8/256 и 17 Pro черный" — у 17 Pro memory:null
@@ -191,6 +204,19 @@ SIM-СЛОТ:
 Каждый объект ОБЯЗАН содержать все 4 поля: model, memory, color, sim.
 Пример: [{"model": "17 Pro Max", "memory": "256", "color": "Orange", "sim": "sim_esim"}]
 Если запрос не о товарах → []"""
+
+
+def _salvage_items(content: str):
+    """Вытаскивает целые объекты {..} из обрезанного ответа ИИ (лучше часть товаров, чем ничего)."""
+    items = []
+    for chunk in re.findall(r'\{[^{}]*\}', content):
+        try:
+            item = json.loads(chunk)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(item, dict) and item.get('model'):
+            items.append(item)
+    return items
 
 
 def build_search_query(item: dict) -> str:
@@ -243,11 +269,13 @@ async def normalize_queries(text: str):
                 {'role': 'user', 'content': user_message},
             ],
             temperature=0,
-            max_tokens=600,
+            max_tokens=4000,   # большие запросы: 30+ позиций в одном сообщении
             timeout=30,
         )
 
         content = response.choices[0].message.content.strip()
+        if response.choices[0].finish_reason == 'length':
+            logger.error('  [ИИ] Ответ обрезан по лимиту токенов — беру то, что успело прийти')
 
         usage = response.usage
         logger.info(f'  [ИИ] <<< Ответ: {content}')
@@ -258,7 +286,14 @@ async def normalize_queries(text: str):
             content = content.split('\n', 1)[1]
             content = content.rsplit('```', 1)[0]
 
-        result = json.loads(content)
+        try:
+            result = json.loads(content)
+        except json.JSONDecodeError:
+            # обрезанный или битый JSON: вытаскиваем товары, которые пришли целиком
+            result = _salvage_items(content)
+            if not result:
+                raise
+            logger.warning(f'  [ИИ] JSON битый, спасли {len(result)} товар(ов) из ответа')
 
         if not isinstance(result, list):
             logger.error(f'ИИ вернул не массив: {content}')
