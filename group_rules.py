@@ -78,7 +78,10 @@ def _looks_like_price(line):
 
 
 def _brand_keys(text, warn=True):
-    """'1. Honor, Самсунг Галакси и iPhone 17' → {'honor', 'samsung', 'iphone'}."""
+    """
+    '1. Honor, Самсунг Галакси и iPhone' → {'honor', 'samsung', 'iphone'} (весь iPhone)
+    'iPhone 18' / 'айфон 18' / 'iPhone 18 Pro Max' → {'iphone:18'} (только 18-е поколение)
+    """
     keys = set()
     for part in _BRAND_SPLIT.split(text):
         name = _NUMBERING.sub('', part.strip())
@@ -89,10 +92,15 @@ def _brand_keys(text, warn=True):
         if key:
             keys.add(key)
             continue
-        # "Самсунг Галакси", "iPhone 17", "Honor (все модели)" — берём знакомые слова
-        tokens = re.findall(r'[^\W_]+', name)
+        # "Самсунг Галакси", "iPhone 18", "Honor (все модели)" — берём знакомые слова
+        tokens = re.findall(r'[a-zа-я]+|\d+', name)          # "iphone18" → ['iphone', '18']
         found = {_NAME_TO_KEY[t] for t in tokens if t in _NAME_TO_KEY}
         found |= {_NAME_TO_KEY[a + b] for a, b in zip(tokens, tokens[1:]) if a + b in _NAME_TO_KEY}
+        # iPhone с номером поколения — не вся линейка, а только эти поколения
+        gens = [t for t in tokens if re.fullmatch(r'1[1-9]', t)]
+        if 'iphone' in found and gens:
+            found.discard('iphone')
+            found |= {f'iphone:{gen}' for gen in gens}
         if found:
             keys |= found
         elif re.fullmatch(r'[a-z]{3,}', name):

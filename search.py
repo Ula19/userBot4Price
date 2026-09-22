@@ -46,6 +46,17 @@ IPHONE_COLOR_MAP = {
     'red': 'red',
     'product red': 'red',
     'yellow': 'yellow',
+
+    # === iPhone 18 Pro / Pro Max (офиц: Deep Black, Silver, Glacier Blue, Burgundy) ===
+    'deep black': 'black',
+    'glacier': 'glacier blue',
+    'glacier blue': 'glacier blue',
+    'ice blue': 'glacier blue',
+    'burgundy': 'burgundy',
+    'cherry': 'burgundy',
+    'dark cherry': 'burgundy',
+    'wine': 'burgundy',
+    'bordeaux': 'burgundy',
 }
 
 
@@ -202,7 +213,21 @@ def _normalize_iphone_color(color):
     """Нормализует цвет iPhone к формату прайса через IPHONE_COLOR_MAP."""
     if not color:
         return None
-    return IPHONE_COLOR_MAP.get(color.lower(), color.lower())
+    c = ' '.join(color.lower().split())
+    return IPHONE_COLOR_MAP.get(c, c)
+
+
+def _iphone_color_match(q_color, p_color):
+    """
+    Цвет iPhone совпал: одинаковые после IPHONE_COLOR_MAP или слова одного входят в другой.
+    В прайсе пишут и коротко, и полностью: 'Glacier' ≡ 'Glacier Blue', 'Black' ≡ 'Deep Black'.
+    """
+    q = _normalize_iphone_color(q_color)
+    p = _normalize_iphone_color(p_color)
+    if q == p:
+        return True
+    q_words, p_words = set(q.split()), set(p.split())
+    return q_words <= p_words or p_words <= q_words
 
 
 def _normalize_storage(s):
@@ -398,9 +423,9 @@ def _search_iphone(item):
                 similar.append({**product, '_reason': f'память: просили {q_storage}, есть {parsed["storage"]}'})
                 continue
 
-        # ФИЛЬТР 4: Цвет (через IPHONE_COLOR_MAP)
+        # ФИЛЬТР 4: Цвет (через IPHONE_COLOR_MAP, 'Glacier' ≡ 'Glacier Blue')
         if q_color is not None:
-            if q_color != parsed['color']:
+            if not _iphone_color_match(q_color, parsed['color']):
                 similar.append({**product, '_reason': f'цвет: просили {q_color}, есть {parsed["color"]}'})
                 continue
 

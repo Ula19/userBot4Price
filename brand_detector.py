@@ -36,9 +36,10 @@ _SIM = r'(?:[12]\s?)?(?:e|е)?(?:sim|сим)(?![а-яa-z])|dual\s?sim|физ\.?\
 _COLORS = (
     r'(?:black|white|blue|orange|silver|gold|green|pink|purple|lavender|sage|yellow|teal|'
     r'ultramarine|midnight|starlight|cosmic|desert|natural|titanium|mist|space\s?black|'
-    r'deep\s?blue|sky\s?blue|cloud)(?![a-z])|'
+    r'deep\s?blue|sky\s?blue|cloud|burgundy|glacier|cherry)(?![a-z])|'
     r'(?:черн|бел|син|голуб|оранж|серебр|сер(?=[ыо])|золот|зелен|розов|фиолет|лаванд|желт|'
-    r'бирюз(?!ов\w*х)|ультрамарин|космик|натурал|титан(?!ов\w*х)|графит|пустын|сирен|шалфе|мятн)'
+    r'бирюз(?!ов\w*х)|ультрамарин|космик|натурал|титан(?!ов\w*х)|графит|пустын|сирен|шалфе|мятн|'
+    r'бордо|бургунд|вишнев|глейшер|глетчер|ледян)'
     r'(?!ых|их|ые|ие|ье|ья|яев|ьн)'
 )
 _IPHONE_WORDS = (
@@ -78,7 +79,7 @@ SMARTPHONE_BRANDS = {
             ('number', r'(?<!\w)(?:xr|xs(?:\s?max)?)\s*(?:64|128|256|512)(?!\d)', False),
             ('number', r'(?<!\w)se\s?(?:20(?:20|22)|[23])\s*(?:64|128|256)(?!\d)', False),
             # "семнадцатый про 256"
-            ('number', rf'(?:одиннадцат|двенадцат|тринадцат|четырнадцат|пятнадцат|шестнадцат|семнадцат|семнаш|шестнаш)\w*{_SP}{_Q}', False),
+            ('number', rf'(?:одиннадцат|двенадцат|тринадцат|четырнадцат|пятнадцат|шестнадцат|семнадцат|восемнадцат|семнаш|шестнаш|восемнаш)\w*{_SP}{_Q}', False),
         ],
     },
     'samsung': {
@@ -418,10 +419,35 @@ def iter_mentions(text, key):
         yield kind, start, end, low
 
 
+# числительные поколения iPhone: "восемнадцатый про" → 18
+_NUMERAL_GEN = {
+    'одиннадцат': '11', 'двенадцат': '12', 'тринадцат': '13', 'четырнадцат': '14', 'пятнадцат': '15',
+    'шестнадцат': '16', 'семнадцат': '17', 'восемнадцат': '18', 'шестнаш': '16', 'семнаш': '17', 'восемнаш': '18',
+}
+# фильтр по одному поколению iPhone: 'iphone:18' — только 18-е, а не вся линейка
+_IPHONE_MODEL_KEY = re.compile(r'^iphone:(1[1-9])$')
+
+
+def _iphone_generations(low, latin):
+    """Какие поколения iPhone упомянуты в тексте: {'17', '18'}. Без номера («промакс», артикул) — не считаем."""
+    gens = set()
+    for kind, start, end in _mentions('iphone', low, latin):
+        span = low[start:end]
+        m = re.search(r'(?<!\d)(1[1-9])(?:(?!\d)|(?=128|256|512))', span)
+        if not m and kind == 'brand':
+            # "айфон 18", "iphone 18 pro", "iPhone18ProMax" — номер сразу после названия
+            m = re.match(r'[^\S\n]*(?:pro[\s-]?max|pro|про)?[^\S\n]*(1[1-9])(?!\d)', low[end:end + 16])
+        if m:
+            gens.add(m.group(1))
+            continue
+        gens.update(gen for word, gen in _NUMERAL_GEN.items() if word in span)
+    return gens
+
+
 def find_brand(text, brands):
     """
     Ищет в тексте смартфон одного из разрешённых брендов.
-    Возвращает ключ бренда ('honor', 'samsung', ...) или None.
+    Возвращает ключ бренда ('honor', 'samsung', 'iphone:18', ...) или None.
     """
     if not text or not brands:
         return None
@@ -430,7 +456,12 @@ def find_brand(text, brands):
     latin = low.translate(_TO_LATIN)
 
     for key in sorted(brands):
-        if key.startswith(UNKNOWN_PREFIX):
+        model_key = _IPHONE_MODEL_KEY.match(key)
+        if model_key:
+            # в фильтре только одно поколение: "iPhone 18" — отвечаем на 18-е, 17-е пропускаем
+            if model_key.group(1) in _iphone_generations(low, latin):
+                return key
+        elif key.startswith(UNKNOWN_PREFIX):
             word = key[len(UNKNOWN_PREFIX):]
             if re.search(rf'(?<!\w){re.escape(word)}(?!\w)', low):
                 return key
