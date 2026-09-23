@@ -7,7 +7,7 @@ import os
 import logging
 import functools
 import contextvars
-from collections import Counter, deque
+from collections import Counter
 from datetime import datetime, timezone, timedelta
 from telethon import events, errors
 from telethon.tl.types import User
@@ -448,14 +448,6 @@ def _group_test_mode():
     return os.getenv('GROUP_TEST_MODE', '').strip().lower() in ('1', 'true', 'yes', 'да')
 
 
-# тексты наших ответов reply в группах — чтобы не принять свой же ответ за новый запрос
-_own_group_replies = deque(maxlen=50)
-
-
-def _normalize_reply_text(text):
-    return ' '.join((text or '').split())
-
-
 def _group_skip(reason, chat_id, test_mode):
     """Считает отсев в статистике; в тестовом режиме ещё и пишет причину в лог."""
     _group_stats[f'отсев:{reason}'] += 1
@@ -466,7 +458,7 @@ def _group_skip(reason, chat_id, test_mode):
 async def _send_group_dm(client, sender, who_label, response):
     """
     Ответ в ЛС с набором текста.
-    True — отправлено, False — флуд-бан (не отвечаем совсем), None — не вышло, пробуем reply в группе.
+    True — отправлено, False — не вышло (в группу не пишем, запрос пропускаем).
     """
     try:
         typing_time = random.uniform(*TYPING_TIME)
@@ -489,38 +481,32 @@ async def _send_group_dm(client, sender, who_label, response):
         except Exception as e2:
             logger.warning(f'  [Группа] повтор ЛС не удался: {e2}')
     except (errors.UserPrivacyRestrictedError, errors.UserIsBlockedError) as e:
-        logger.info(f'  [Группа] ЛС недоступно ({type(e).__name__}), fallback в группу')
+        logger.info(f'  [Группа] ЛС закрыто ({type(e).__name__}) — пропускаем')
     except Exception as e:
-        logger.warning(f'  [Группа] ЛС не вышло ({type(e).__name__}: {e}), fallback в группу')
-    return None
+        logger.warning(f'  [Группа] ЛС не вышло ({type(e).__name__}: {e}) — пропускаем')
+    return False
 
 
 async def _send_group_reply(client, event, sender, who_label, response):
     """
-    Отвечает на запрос из группы с короткой имитацией человека (как в режиме SOURCE_BOT).
-    Живому человеку — в ЛС; боту, каналу или если ЛС закрыто — reply в группе.
+    Отвечает на запрос из группы ТОЛЬКО в ЛС. В саму группу не пишем никогда:
+    нельзя написать в ЛС (бот, канал, закрытая личка, флуд) — просто пропускаем запрос.
     Возвращает True, если ответ ушёл.
     """
+    # боту и каналу в ЛС писать бесполезно — их владелец ответ не увидит
+    if not isinstance(sender, User) or sender.bot:
+        _group_stats['пропуск:лс_нельзя'] += 1
+        logger.info(f'  [Группа] {who_label}: в ЛС писать нельзя (бот или канал) — пропускаем')
+        return False
+
     delay = random.uniform(*REPLY_DELAY)
     logger.info(f'  Жду {delay:.1f}с перед ответом {who_label}...')
     await asyncio.sleep(delay)
 
-    # боту или каналу в ЛС писать бесполезно — их владелец ответ не увидит
-    if isinstance(sender, User) and not sender.bot:
-        sent = await _send_group_dm(client, sender, who_label, response)
-        if sent is not None:
-            return sent
-
-    try:
-        async with client.action(event.chat_id, 'typing'):
-            await asyncio.sleep(random.uniform(*TYPING_TIME))
-        _own_group_replies.append(_normalize_reply_text(response))
-        await event.reply(response)
-        logger.info(f'  Ответ отправлен reply в группу {event.chat_id}')
+    if await _send_group_dm(client, sender, who_label, response):
         return True
-    except Exception as e:
-        logger.error(f'  [Группа] reply не удался: {e}')
-        return False
+    _group_stats['пропуск:лс_закрыто'] += 1
+    return False
 
 
 def register_group_handlers(client, group_chats, owner_id=None):
@@ -541,10 +527,6 @@ def register_group_handlers(client, group_chats, owner_id=None):
     async def on_group_message(event):
         text = event.raw_text
         if not text:
-            return
-
-        # наш же ответ reply в группе — не запрос
-        if event.out and _normalize_reply_text(text) in _own_group_replies:
             return
 
         test_mode = _group_test_mode()
